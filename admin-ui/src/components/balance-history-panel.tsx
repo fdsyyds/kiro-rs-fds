@@ -3,7 +3,7 @@ import { RefreshCw, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { useBalanceHistory } from '@/hooks/use-credentials'
+import { useBalanceHistory, useCredentials } from '@/hooks/use-credentials'
 import { useQueryClient } from '@tanstack/react-query'
 import type { BalanceHistoryEntry } from '@/types/api'
 
@@ -24,6 +24,7 @@ function formatNumber(n: number): string {
 
 export function BalanceHistoryPanel() {
   const { data: historyMap, isLoading, error } = useBalanceHistory()
+  const { data: credentialsData } = useCredentials()
   const queryClient = useQueryClient()
   // 记录每个凭据的展开状态，默认全部折叠
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
@@ -115,13 +116,14 @@ export function BalanceHistoryPanel() {
         {entries.map(([credentialId, records]: [string, BalanceHistoryEntry[]]) => {
           const latest = records[records.length - 1]
           const isExpanded = expandedIds.has(credentialId)
+          const credential = credentialsData?.credentials.find(c => c.id === Number(credentialId))
           return (
             <Card key={credentialId}>
               <CardHeader className="pb-3 cursor-pointer" onClick={() => toggleExpand(credentialId)}>
                 <CardTitle className="flex items-center justify-between text-base">
                   <div className="flex items-center gap-2">
                     {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                    <span>凭据 #{credentialId}</span>
+                    <span>凭据 #{credentialId}{credential?.clientId ? ` ${credential.clientId}` : ''}</span>
                     {latest?.data.subscriptionTitle && (
                       <Badge variant="outline">{latest.data.subscriptionTitle}</Badge>
                     )}

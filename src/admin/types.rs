@@ -51,9 +51,10 @@ pub struct CredentialStatusItem {
     /// 代理 URL（用于前端展示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    /// OIDC Client ID（用于前端展示）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
-
-// ============ 操作请求 ============
 
 /// 启用/禁用凭据请求
 #[derive(Debug, Deserialize)]

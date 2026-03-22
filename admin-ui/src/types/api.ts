@@ -22,9 +22,8 @@ export interface CredentialStatusItem {
   lastUsedAt: string | null
   hasProxy: boolean
   proxyUrl?: string
+  clientId?: string
 }
-
-// 余额响应
 export interface BalanceResponse {
   id: number
   subscriptionTitle: string | null

@@ -89,6 +89,7 @@ impl AdminService {
                 last_used_at: entry.last_used_at.clone(),
                 has_proxy: entry.has_proxy,
                 proxy_url: entry.proxy_url,
+                client_id: entry.client_id,
             })
             .collect();
 

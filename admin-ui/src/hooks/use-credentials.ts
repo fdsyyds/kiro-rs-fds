@@ -19,6 +19,8 @@ import {
   resetKeyUsage,
   getRpm,
   getBalanceHistory,
+  getTokenMultiplier,
+  setTokenMultiplier,
 } from '@/api/credentials'
 import type { AddCredentialRequest, UpdateCredentialRequest, CreateApiKeyRequest, UpdateApiKeyRequest } from '@/types/api'
 
@@ -222,5 +224,26 @@ export function useBalanceHistory() {
     queryKey: ['balanceHistory'],
     queryFn: getBalanceHistory,
     refetchInterval: 60000,
+  })
+}
+
+// ============ Token 倍率 Hooks ============
+
+// 获取 Token 倍率
+export function useTokenMultiplier() {
+  return useQuery({
+    queryKey: ['tokenMultiplier'],
+    queryFn: getTokenMultiplier,
+  })
+}
+
+// 设置 Token 倍率
+export function useSetTokenMultiplier() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (multiplier: number) => setTokenMultiplier(multiplier),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tokenMultiplier'] })
+    },
   })
 }

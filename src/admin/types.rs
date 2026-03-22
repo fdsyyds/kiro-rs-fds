@@ -214,6 +214,24 @@ pub struct LoadBalancingModeResponse {
     pub mode: String,
 }
 
+// ============ Token 倍率配置 ============
+
+/// Token 倍率响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenMultiplierResponse {
+    /// 当前倍率
+    pub multiplier: f64,
+}
+
+/// 设置 Token 倍率请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTokenMultiplierRequest {
+    /// 新倍率值（必须大于 0）
+    pub multiplier: f64,
+}
+
 /// 设置负载均衡模式请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -110,6 +110,18 @@ export async function setLoadBalancingMode(mode: 'priority' | 'balanced'): Promi
   return data
 }
 
+// 获取 Token 倍率
+export async function getTokenMultiplier(): Promise<{ multiplier: number }> {
+  const { data } = await api.get<{ multiplier: number }>('/config/token-multiplier')
+  return data
+}
+
+// 设置 Token 倍率
+export async function setTokenMultiplier(multiplier: number): Promise<{ multiplier: number }> {
+  const { data } = await api.put<{ multiplier: number }>('/config/token-multiplier', { multiplier })
+  return data
+}
+
 // ============ 服务器信息 ============
 
 // 获取服务器连接信息

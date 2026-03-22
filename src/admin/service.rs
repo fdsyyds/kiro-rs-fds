@@ -16,7 +16,8 @@ use super::error::AdminServiceError;
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceHistoryEntry, BalanceResponse,
     CredentialStatusItem, CredentialsStatusResponse, LoadBalancingModeResponse,
-    SetLoadBalancingModeRequest, UpdateCredentialRequest,
+    SetLoadBalancingModeRequest, SetTokenMultiplierRequest, TokenMultiplierResponse,
+    UpdateCredentialRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -382,6 +383,33 @@ impl AdminService {
             .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
 
         Ok(LoadBalancingModeResponse { mode: req.mode })
+    }
+
+    /// 获取 Token 倍率
+    pub fn get_token_multiplier(&self) -> TokenMultiplierResponse {
+        TokenMultiplierResponse {
+            multiplier: self.token_manager.get_token_multiplier(),
+        }
+    }
+
+    /// 设置 Token 倍率
+    pub fn set_token_multiplier(
+        &self,
+        req: SetTokenMultiplierRequest,
+    ) -> Result<TokenMultiplierResponse, AdminServiceError> {
+        if req.multiplier <= 0.0 {
+            return Err(AdminServiceError::InvalidCredential(
+                "倍率必须大于 0".to_string(),
+            ));
+        }
+
+        self.token_manager
+            .set_token_multiplier(req.multiplier)
+            .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
+
+        Ok(TokenMultiplierResponse {
+            multiplier: req.multiplier,
+        })
     }
 
     // ============ 余额缓存持久化 ============

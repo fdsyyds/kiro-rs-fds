@@ -91,6 +91,10 @@ pub struct Config {
     #[serde(default = "default_load_balancing_mode")]
     pub load_balancing_mode: String,
 
+    /// Token 倍率（用于对接 NewAPI 时放大返回的 token 数）
+    #[serde(default = "default_token_multiplier")]
+    pub token_multiplier: f64,
+
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
     config_path: Option<PathBuf>,
@@ -133,6 +137,10 @@ fn default_load_balancing_mode() -> String {
     "priority".to_string()
 }
 
+fn default_token_multiplier() -> f64 {
+    1.0
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -155,6 +163,7 @@ impl Default for Config {
             proxy_password: None,
             admin_api_key: None,
             load_balancing_mode: default_load_balancing_mode(),
+            token_multiplier: default_token_multiplier(),
             config_path: None,
         }
     }
@@ -260,6 +269,11 @@ impl Config {
         }
         if let Ok(v) = env::var("LOAD_BALANCING_MODE") {
             self.load_balancing_mode = v;
+        }
+        if let Ok(v) = env::var("TOKEN_MULTIPLIER") {
+            if let Ok(m) = v.parse::<f64>() {
+                self.token_multiplier = m;
+            }
         }
     }
 }

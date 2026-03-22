@@ -566,15 +566,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     min="0.1"
                     value={multiplierInput}
                     onChange={(e) => setMultiplierInput(e.target.value)}
-                    className="w-16 h-7 px-2 text-xs border rounded bg-background text-foreground"
+                    className="w-20 h-8 px-2 text-sm border rounded bg-background text-foreground"
                     autoFocus
-                    onBlur={() => {
-                      if (!isSettingMultiplier) setIsEditingMultiplier(false)
-                    }}
                     disabled={isSettingMultiplier}
                   />
-                  <Button type="submit" size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={isSettingMultiplier}>
+                  <Button type="submit" size="sm" variant="outline" disabled={isSettingMultiplier}>
                     确定
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setIsEditingMultiplier(false)} disabled={isSettingMultiplier}>
+                    取消
                   </Button>
                 </form>
               ) : (
@@ -586,7 +586,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     setIsEditingMultiplier(true)
                   }}
                   title="点击修改 Token 倍率"
-                  className="h-7 px-2 text-xs"
                 >
                   倍率: {multiplierData?.multiplier ?? 1}x
                 </Button>

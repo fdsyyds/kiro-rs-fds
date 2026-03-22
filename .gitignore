@@ -20,3 +20,4 @@
 /user-ui/dist/
 /user-ui/tsconfig.tsbuildinfo
 /user-ui/pnpm-lock.yaml
+/WORKFLOW.md

@@ -147,3 +147,11 @@ export interface RpmSnapshot {
   byCredential: Record<string, number>
   byApiKey: Record<string, number>
 }
+
+// 余额历史记录
+export interface BalanceHistoryEntry {
+  recordedAt: number
+  data: BalanceResponse
+}
+
+export type BalanceHistoryMap = Record<string, BalanceHistoryEntry[]>

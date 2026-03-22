@@ -1,6 +1,7 @@
 //! Admin API 业务逻辑服务
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,13 +14,16 @@ use crate::kiro::token_manager::MultiTokenManager;
 
 use super::error::AdminServiceError;
 use super::types::{
-    AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
-    CredentialsStatusResponse, LoadBalancingModeResponse, SetLoadBalancingModeRequest,
-    UpdateCredentialRequest,
+    AddCredentialRequest, AddCredentialResponse, BalanceHistoryEntry, BalanceResponse,
+    CredentialStatusItem, CredentialsStatusResponse, LoadBalancingModeResponse,
+    SetLoadBalancingModeRequest, UpdateCredentialRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
 const BALANCE_CACHE_TTL_SECS: i64 = 300;
+
+/// 余额历史最大记录数
+const MAX_BALANCE_HISTORY_ENTRIES: usize = 10;
 
 /// 缓存的余额条目（含时间戳）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +41,9 @@ pub struct AdminService {
     token_manager: Arc<MultiTokenManager>,
     balance_cache: Mutex<HashMap<u64, CachedBalance>>,
     cache_path: Option<PathBuf>,
+    /// 余额历史记录（每个凭据最多保留 MAX_BALANCE_HISTORY_ENTRIES 条）
+    balance_history: Mutex<HashMap<u64, VecDeque<BalanceHistoryEntry>>>,
+    history_path: Option<PathBuf>,
 }
 
 impl AdminService {
@@ -44,13 +51,19 @@ impl AdminService {
         let cache_path = token_manager
             .cache_dir()
             .map(|d| d.join("kiro_balance_cache.json"));
+        let history_path = token_manager
+            .cache_dir()
+            .map(|d| d.join("kiro_balance_history.json"));
 
         let balance_cache = Self::load_balance_cache_from(&cache_path);
+        let balance_history = Self::load_balance_history_from(&history_path);
 
         Self {
             token_manager,
             balance_cache: Mutex::new(balance_cache),
             cache_path,
+            balance_history: Mutex::new(balance_history),
+            history_path,
         }
     }
 
@@ -182,6 +195,72 @@ impl AdminService {
         })
     }
 
+    /// 轮询所有凭据余额并记录历史（由后台定时任务调用）
+    pub async fn poll_all_balances(&self) {
+        let snapshot = self.token_manager.snapshot();
+        let ids: Vec<u64> = snapshot
+            .entries
+            .iter()
+            .filter(|e| !e.disabled)
+            .map(|e| e.id)
+            .collect();
+
+        tracing::debug!("开始轮询 {} 个凭据余额", ids.len());
+
+        for id in ids {
+            match self.fetch_balance(id).await {
+                Ok(balance) => {
+                    // 同时更新余额缓存
+                    {
+                        let mut cache = self.balance_cache.lock();
+                        cache.insert(
+                            id,
+                            CachedBalance {
+                                cached_at: Utc::now().timestamp() as f64,
+                                data: balance.clone(),
+                            },
+                        );
+                    }
+                    // 追加到历史记录
+                    {
+                        let mut history = self.balance_history.lock();
+                        let entries = history.entry(id).or_insert_with(VecDeque::new);
+                        entries.push_back(BalanceHistoryEntry {
+                            recorded_at: Utc::now().timestamp() as f64,
+                            data: balance,
+                        });
+                        // 超过 10 条自动删除旧记录
+                        while entries.len() > MAX_BALANCE_HISTORY_ENTRIES {
+                            entries.pop_front();
+                        }
+                    }
+                }
+                Err(e) => {
+                    // 失败不删除历史，封号后最后记录保留
+                    tracing::warn!("轮询凭据 #{} 余额失败: {}", id, e);
+                }
+            }
+        }
+
+        self.save_balance_cache();
+        self.save_balance_history();
+    }
+
+    /// 获取所有凭据的余额历史
+    pub fn get_all_balance_history(&self) -> HashMap<String, Vec<BalanceHistoryEntry>> {
+        let history = self.balance_history.lock();
+        history
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.iter().cloned().collect()))
+            .collect()
+    }
+
+    /// 获取单个凭据的余额历史
+    pub fn get_balance_history(&self, id: u64) -> Option<Vec<BalanceHistoryEntry>> {
+        let history = self.balance_history.lock();
+        history.get(&id).map(|v| v.iter().cloned().collect())
+    }
+
     /// 添加新凭据
     pub async fn add_credential(
         &self,
@@ -246,6 +325,13 @@ impl AdminService {
             cache.remove(&id);
         }
         self.save_balance_cache();
+
+        // 清理已删除凭据的余额历史
+        {
+            let mut history = self.balance_history.lock();
+            history.remove(&id);
+        }
+        self.save_balance_history();
 
         Ok(())
     }
@@ -351,6 +437,64 @@ impl AdminService {
                 }
             }
             Err(e) => tracing::warn!("序列化余额缓存失败: {}", e),
+        }
+    }
+
+    // ============ 余额历史持久化 ============
+
+    fn load_balance_history_from(
+        history_path: &Option<PathBuf>,
+    ) -> HashMap<u64, VecDeque<BalanceHistoryEntry>> {
+        let path = match history_path {
+            Some(p) => p,
+            None => return HashMap::new(),
+        };
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return HashMap::new(),
+        };
+
+        let map: HashMap<String, Vec<BalanceHistoryEntry>> = match serde_json::from_str(&content) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("解析余额历史失败，将忽略: {}", e);
+                return HashMap::new();
+            }
+        };
+
+        map.into_iter()
+            .filter_map(|(k, v)| {
+                let id = k.parse::<u64>().ok()?;
+                let mut deque = VecDeque::from(v);
+                // 加载时也确保不超过最大记录数
+                while deque.len() > MAX_BALANCE_HISTORY_ENTRIES {
+                    deque.pop_front();
+                }
+                Some((id, deque))
+            })
+            .collect()
+    }
+
+    fn save_balance_history(&self) {
+        let path = match &self.history_path {
+            Some(p) => p,
+            None => return,
+        };
+
+        let history = self.balance_history.lock();
+        let map: HashMap<String, Vec<&BalanceHistoryEntry>> = history
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.iter().collect()))
+            .collect();
+
+        match serde_json::to_string_pretty(&map) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, json) {
+                    tracing::warn!("保存余额历史失败: {}", e);
+                }
+            }
+            Err(e) => tracing::warn!("序列化余额历史失败: {}", e),
         }
     }
 

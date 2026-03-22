@@ -177,7 +177,21 @@ async fn main() {
             if let Some(ref tracker) = usage_tracker {
                 admin_state = admin_state.with_usage_tracker(tracker.clone());
             }
-            let admin_app = admin::create_admin_router(admin_state);
+            let admin_app = admin::create_admin_router(admin_state.clone());
+
+            // 启动后台余额轮询任务（每分钟）
+            {
+                let service = admin_state.service.clone();
+                tokio::spawn(async move {
+                    // 首次延迟 10 秒，等服务完全启动
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        service.poll_all_balances().await;
+                    }
+                });
+            }
 
             // 创建 Admin UI 路由
             let admin_ui_app = admin_ui::create_admin_ui_router();

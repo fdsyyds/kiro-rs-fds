@@ -18,6 +18,7 @@ import {
   getAllUsage,
   resetKeyUsage,
   getRpm,
+  getBalanceHistory,
 } from '@/api/credentials'
 import type { AddCredentialRequest, UpdateCredentialRequest, CreateApiKeyRequest, UpdateApiKeyRequest } from '@/types/api'
 
@@ -210,5 +211,16 @@ export function useRpm() {
     queryKey: ['rpm'],
     queryFn: getRpm,
     refetchInterval: 5000,
+  })
+}
+
+// ============ 余额历史 Hooks ============
+
+// 查询所有凭据余额历史（每 60 秒刷新）
+export function useBalanceHistory() {
+  return useQuery({
+    queryKey: ['balanceHistory'],
+    queryFn: getBalanceHistory,
+    refetchInterval: 60000,
   })
 }

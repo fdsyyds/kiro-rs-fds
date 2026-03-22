@@ -137,3 +137,22 @@ pub async fn set_load_balancing_mode(
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }
+
+/// GET /api/admin/credentials/balance-history
+/// 获取所有凭据的余额历史
+pub async fn get_all_balance_history(State(state): State<AdminState>) -> impl IntoResponse {
+    let history = state.service.get_all_balance_history();
+    Json(history)
+}
+
+/// GET /api/admin/credentials/:id/balance-history
+/// 获取单个凭据的余额历史
+pub async fn get_credential_balance_history(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match state.service.get_balance_history(id) {
+        Some(history) => Json(serde_json::json!({ "id": id, "history": history })).into_response(),
+        None => Json(serde_json::json!({ "id": id, "history": [] })).into_response(),
+    }
+}

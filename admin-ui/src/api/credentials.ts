@@ -14,6 +14,7 @@ import type {
   UpdateApiKeyRequest,
   UsageSummary,
   RpmSnapshot,
+  BalanceHistoryMap,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -168,5 +169,13 @@ export async function resetKeyUsage(id: number): Promise<SuccessResponse> {
 // 获取实时 RPM 数据
 export async function getRpm(): Promise<RpmSnapshot> {
   const { data } = await api.get<RpmSnapshot>('/rpm')
+  return data
+}
+
+// ============ 余额历史 ============
+
+// 获取所有凭据的余额历史
+export async function getBalanceHistory(): Promise<BalanceHistoryMap> {
+  const { data } = await api.get<BalanceHistoryMap>('/credentials/balance-history')
   return data
 }

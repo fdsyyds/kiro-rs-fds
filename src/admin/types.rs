@@ -193,6 +193,16 @@ pub struct BalanceResponse {
     pub next_reset_at: Option<f64>,
 }
 
+/// 余额历史记录条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceHistoryEntry {
+    /// 记录时间（Unix 秒）
+    pub recorded_at: f64,
+    /// 余额数据
+    pub data: BalanceResponse,
+}
+
 // ============ 负载均衡配置 ============
 
 /// 负载均衡模式响应

@@ -111,14 +111,14 @@ export async function setLoadBalancingMode(mode: 'priority' | 'balanced'): Promi
 }
 
 // 获取 Token 倍率
-export async function getTokenMultiplier(): Promise<{ multiplier: number }> {
-  const { data } = await api.get<{ multiplier: number }>('/config/token-multiplier')
+export async function getMultipliers(): Promise<{ inputMultiplier: number; outputMultiplier: number }> {
+  const { data } = await api.get<{ inputMultiplier: number; outputMultiplier: number }>('/config/multipliers')
   return data
 }
 
 // 设置 Token 倍率
-export async function setTokenMultiplier(multiplier: number): Promise<{ multiplier: number }> {
-  const { data } = await api.put<{ multiplier: number }>('/config/token-multiplier', { multiplier })
+export async function setMultipliers(inputMultiplier: number, outputMultiplier: number): Promise<{ inputMultiplier: number; outputMultiplier: number }> {
+  const { data } = await api.put<{ inputMultiplier: number; outputMultiplier: number }>('/config/multipliers', { inputMultiplier, outputMultiplier })
   return data
 }
 

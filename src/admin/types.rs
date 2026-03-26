@@ -219,17 +219,21 @@ pub struct LoadBalancingModeResponse {
 /// Token 倍率响应
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TokenMultiplierResponse {
-    /// 当前倍率
-    pub multiplier: f64,
+pub struct MultipliersResponse {
+    /// 输入倍率
+    pub input_multiplier: f64,
+    /// 输出倍率
+    pub output_multiplier: f64,
 }
 
 /// 设置 Token 倍率请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SetTokenMultiplierRequest {
-    /// 新倍率值（必须大于 0）
-    pub multiplier: f64,
+pub struct SetMultipliersRequest {
+    /// 输入倍率（必须大于 0）
+    pub input_multiplier: f64,
+    /// 输出倍率（必须大于 0）
+    pub output_multiplier: f64,
 }
 
 /// 设置负载均衡模式请求

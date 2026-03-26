@@ -13,8 +13,8 @@ use super::{
     handlers::{
         add_credential, delete_credential, get_all_balance_history, get_all_credentials,
         get_credential_balance, get_credential_balance_history, get_load_balancing_mode,
-        get_token_multiplier, reset_failure_count, set_credential_disabled,
-        set_credential_priority, set_load_balancing_mode, set_token_multiplier,
+        get_multipliers, reset_failure_count, set_credential_disabled,
+        set_credential_priority, set_load_balancing_mode, set_multipliers,
         update_credential,
     },
     middleware::{AdminState, admin_auth_middleware},
@@ -40,8 +40,8 @@ pub fn create_admin_router(state: AdminState) -> Router {
             get(get_load_balancing_mode).put(set_load_balancing_mode),
         )
         .route(
-            "/config/token-multiplier",
-            get(get_token_multiplier).put(set_token_multiplier),
+            "/config/multipliers",
+            get(get_multipliers).put(set_multipliers),
         )
         // API Key 管理
         .route("/server-info", get(get_server_info))

@@ -14,7 +14,7 @@ import { KamImportDialog } from '@/components/kam-import-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { ApiKeysPanel } from '@/components/api-keys-panel'
 import { BalanceHistoryPanel } from '@/components/balance-history-panel'
-import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode, useRpm, useTokenMultiplier, useSetTokenMultiplier } from '@/hooks/use-credentials'
+import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode, useRpm, useMultipliers, useSetMultipliers } from '@/hooks/use-credentials'
 import { getCredentialBalance } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
 import type { BalanceResponse } from '@/types/api'
@@ -56,9 +56,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const { mutate: resetFailure } = useResetFailure()
   const { data: loadBalancingData, isLoading: isLoadingMode } = useLoadBalancingMode()
   const { mutate: setLoadBalancingMode, isPending: isSettingMode } = useSetLoadBalancingMode()
-  const { data: multiplierData } = useTokenMultiplier()
-  const { mutate: setTokenMultiplier, isPending: isSettingMultiplier } = useSetTokenMultiplier()
-  const [multiplierInput, setMultiplierInput] = useState('')
+  const { data: multipliersData } = useMultipliers()
+  const { mutate: setMultipliers, isPending: isSettingMultiplier } = useSetMultipliers()
+  const [inputMultiplierInput, setInputMultiplierInput] = useState('')
+  const [outputMultiplierInput, setOutputMultiplierInput] = useState('')
   const [isEditingMultiplier, setIsEditingMultiplier] = useState(false)
 
   // 计算分页
@@ -544,14 +545,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   className="flex items-center gap-1"
                   onSubmit={(e) => {
                     e.preventDefault()
-                    const val = parseFloat(multiplierInput)
-                    if (isNaN(val) || val <= 0) {
+                    const inputVal = parseFloat(inputMultiplierInput)
+                    const outputVal = parseFloat(outputMultiplierInput)
+                    if (isNaN(inputVal) || inputVal <= 0 || isNaN(outputVal) || outputVal <= 0) {
                       toast.error('倍率必须大于 0')
                       return
                     }
-                    setTokenMultiplier(val, {
+                    setMultipliers({ inputMultiplier: inputVal, outputMultiplier: outputVal }, {
                       onSuccess: () => {
-                        toast.success(`Token 倍率已设置为 ${val}x`)
+                        toast.success(`Token 倍率已设置为 输入:${inputVal}x / 输出:${outputVal}x`)
                         setIsEditingMultiplier(false)
                       },
                       onError: (error) => {
@@ -560,14 +562,25 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     })
                   }}
                 >
+                  <span className="text-xs text-muted-foreground">输入:</span>
                   <input
                     type="number"
                     step="0.1"
                     min="0.1"
-                    value={multiplierInput}
-                    onChange={(e) => setMultiplierInput(e.target.value)}
-                    className="w-20 h-8 px-2 text-sm border rounded bg-background text-foreground"
+                    value={inputMultiplierInput}
+                    onChange={(e) => setInputMultiplierInput(e.target.value)}
+                    className="w-16 h-8 px-2 text-sm border rounded bg-background text-foreground"
                     autoFocus
+                    disabled={isSettingMultiplier}
+                  />
+                  <span className="text-xs text-muted-foreground">输出:</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={outputMultiplierInput}
+                    onChange={(e) => setOutputMultiplierInput(e.target.value)}
+                    className="w-16 h-8 px-2 text-sm border rounded bg-background text-foreground"
                     disabled={isSettingMultiplier}
                   />
                   <Button type="submit" size="sm" variant="outline" disabled={isSettingMultiplier}>
@@ -582,12 +595,13 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    setMultiplierInput(String(multiplierData?.multiplier ?? 1))
+                    setInputMultiplierInput(String(multipliersData?.inputMultiplier ?? 1))
+                    setOutputMultiplierInput(String(multipliersData?.outputMultiplier ?? 1))
                     setIsEditingMultiplier(true)
                   }}
                   title="点击修改 Token 倍率"
                 >
-                  倍率: {multiplierData?.multiplier ?? 1}x
+                  输入: {multipliersData?.inputMultiplier ?? 1}x / 输出: {multipliersData?.outputMultiplier ?? 1}x
                 </Button>
               )}
             </div>

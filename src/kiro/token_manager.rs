@@ -533,8 +533,10 @@ pub struct MultiTokenManager {
     is_multiple_format: AtomicBool,
     /// 负载均衡模式（运行时可修改）
     load_balancing_mode: Mutex<String>,
-    /// Token 倍率（运行时可修改，用于放大返回给客户端的 token 数）
-    token_multiplier: Mutex<f64>,
+    /// 输入 Token 倍率（运行时可修改，用于放大返回给客户端的 input_tokens）
+    input_multiplier: Mutex<f64>,
+    /// 输出 Token 倍率（运行时可修改，用于放大返回给客户端的 output_tokens）
+    output_multiplier: Mutex<f64>,
     /// 最近一次统计持久化时间（用于 debounce）
     last_stats_save_at: Mutex<Option<Instant>>,
     /// 统计数据是否有未落盘更新
@@ -640,7 +642,8 @@ impl MultiTokenManager {
             .unwrap_or(0);
 
         let load_balancing_mode = config.load_balancing_mode.clone();
-        let token_multiplier = config.token_multiplier;
+        let input_multiplier = config.input_multiplier;
+        let output_multiplier = config.output_multiplier;
         let manager = Self {
             config,
             proxy,
@@ -650,7 +653,8 @@ impl MultiTokenManager {
             credentials_path,
             is_multiple_format: AtomicBool::new(is_multiple_format),
             load_balancing_mode: Mutex::new(load_balancing_mode),
-            token_multiplier: Mutex::new(token_multiplier),
+            input_multiplier: Mutex::new(input_multiplier),
+            output_multiplier: Mutex::new(output_multiplier),
             last_stats_save_at: Mutex::new(None),
             stats_dirty: AtomicBool::new(false),
             rr_counter: AtomicU64::new(0),
@@ -1837,25 +1841,31 @@ impl MultiTokenManager {
         Ok(())
     }
 
-    /// 获取 Token 倍率（Admin API）
-    pub fn get_token_multiplier(&self) -> f64 {
-        *self.token_multiplier.lock()
+    /// 获取输入 Token 倍率（Admin API）
+    pub fn get_input_multiplier(&self) -> f64 {
+        *self.input_multiplier.lock()
     }
 
-    fn persist_token_multiplier(&self, multiplier: f64) -> anyhow::Result<()> {
+    /// 获取输出 Token 倍率（Admin API）
+    pub fn get_output_multiplier(&self) -> f64 {
+        *self.output_multiplier.lock()
+    }
+
+    fn persist_multipliers(&self, input: f64, output: f64) -> anyhow::Result<()> {
         use anyhow::Context;
 
         let config_path = match self.config.config_path() {
             Some(path) => path.to_path_buf(),
             None => {
-                tracing::warn!("配置文件路径未知，Token 倍率仅在当前进程生效: {}", multiplier);
+                tracing::warn!("配置文件路径未知，Token 倍率仅在当前进程生效: input={}, output={}", input, output);
                 return Ok(());
             }
         };
 
         let mut config = Config::load(&config_path)
             .with_context(|| format!("重新加载配置失败: {}", config_path.display()))?;
-        config.token_multiplier = multiplier;
+        config.input_multiplier = input;
+        config.output_multiplier = output;
         config
             .save()
             .with_context(|| format!("持久化 Token 倍率失败: {}", config_path.display()))?;
@@ -1864,23 +1874,25 @@ impl MultiTokenManager {
     }
 
     /// 设置 Token 倍率（Admin API）
-    pub fn set_token_multiplier(&self, multiplier: f64) -> anyhow::Result<()> {
-        if multiplier <= 0.0 {
+    pub fn set_multipliers(&self, input: f64, output: f64) -> anyhow::Result<()> {
+        if input <= 0.0 || output <= 0.0 {
             anyhow::bail!("Token 倍率必须大于 0");
         }
 
-        let previous = self.get_token_multiplier();
-        if (previous - multiplier).abs() < f64::EPSILON {
+        let prev_input = self.get_input_multiplier();
+        let prev_output = self.get_output_multiplier();
+        if (prev_input - input).abs() < f64::EPSILON && (prev_output - output).abs() < f64::EPSILON {
             return Ok(());
         }
 
-        *self.token_multiplier.lock() = multiplier;
+        *self.input_multiplier.lock() = input;
+        *self.output_multiplier.lock() = output;
 
-        if let Err(err) = self.persist_token_multiplier(multiplier) {
+        if let Err(err) = self.persist_multipliers(input, output) {
             tracing::warn!("Token 倍率持久化失败，仅当前进程生效: {}", err);
         }
 
-        tracing::info!("Token 倍率已设置为: {}", multiplier);
+        tracing::info!("Token 倍率已设置为: input={}, output={}", input, output);
         Ok(())
     }
 }

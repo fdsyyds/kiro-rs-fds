@@ -495,8 +495,10 @@ pub struct StreamContext {
     api_key_id: Option<u32>,
     /// 缓存命中 tokens（从 input_tokens 中拆分，按折扣计费）
     cache_read_tokens: i32,
-    /// Token 倍率（用于放大返回给客户端的 token 数）
-    token_multiplier: f64,
+    /// 输入 Token 倍率（用于放大返回给客户端的 input_tokens）
+    input_multiplier: f64,
+    /// 输出 Token 倍率（用于放大返回给客户端的 output_tokens）
+    output_multiplier: f64,
 }
 
 impl StreamContext {
@@ -524,7 +526,8 @@ impl StreamContext {
             usage_tracker: None,
             api_key_id: None,
             cache_read_tokens: 0,
-            token_multiplier: 1.0,
+            input_multiplier: 1.0,
+            output_multiplier: 1.0,
         }
     }
 
@@ -535,8 +538,9 @@ impl StreamContext {
     }
 
     /// 设置 Token 倍率
-    pub fn with_token_multiplier(mut self, multiplier: f64) -> Self {
-        self.token_multiplier = multiplier;
+    pub fn with_multipliers(mut self, input_multiplier: f64, output_multiplier: f64) -> Self {
+        self.input_multiplier = input_multiplier;
+        self.output_multiplier = output_multiplier;
         self
     }
 
@@ -553,7 +557,7 @@ impl StreamContext {
 
     /// 生成 message_start 事件
     pub fn create_message_start_event(&self) -> serde_json::Value {
-        let reported_input = (self.input_tokens as f64 * self.token_multiplier) as i32;
+        let reported_input = (self.input_tokens as f64 * self.input_multiplier) as i32;
         json!({
             "type": "message_start",
             "message": {
@@ -1107,8 +1111,8 @@ impl StreamContext {
         }
 
         // 生成最终事件（应用 Token 倍率）
-        let reported_input = (final_input_tokens as f64 * self.token_multiplier) as i32;
-        let reported_output = (self.output_tokens as f64 * self.token_multiplier) as i32;
+        let reported_input = (final_input_tokens as f64 * self.input_multiplier) as i32;
+        let reported_output = (self.output_tokens as f64 * self.output_multiplier) as i32;
         events.extend(
             self.state_manager
                 .generate_final_events(reported_input, reported_output),
@@ -1172,8 +1176,8 @@ impl BufferedStreamContext {
     }
 
     /// 设置 Token 倍率
-    pub fn with_token_multiplier(mut self, multiplier: f64) -> Self {
-        self.inner = self.inner.with_token_multiplier(multiplier);
+    pub fn with_multipliers(mut self, input_multiplier: f64, output_multiplier: f64) -> Self {
+        self.inner = self.inner.with_multipliers(input_multiplier, output_multiplier);
         self
     }
 
@@ -1218,7 +1222,7 @@ impl BufferedStreamContext {
             .unwrap_or(self.estimated_input_tokens);
 
         // 应用 Token 倍率
-        let reported_input = (final_input_tokens as f64 * self.inner.token_multiplier) as i32;
+        let reported_input = (final_input_tokens as f64 * self.inner.input_multiplier) as i32;
 
         // 更正 message_start 事件中的 input_tokens
         for event in &mut self.event_buffer {

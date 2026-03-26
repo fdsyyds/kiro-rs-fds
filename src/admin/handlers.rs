@@ -10,7 +10,7 @@ use super::{
     middleware::AdminState,
     types::{
         AddCredentialRequest, SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
-        SetTokenMultiplierRequest, SuccessResponse, UpdateCredentialRequest,
+        SetMultipliersRequest, SuccessResponse, UpdateCredentialRequest,
     },
 };
 
@@ -157,20 +157,20 @@ pub async fn get_credential_balance_history(
     }
 }
 
-/// GET /api/admin/config/token-multiplier
+/// GET /api/admin/config/multipliers
 /// 获取 Token 倍率
-pub async fn get_token_multiplier(State(state): State<AdminState>) -> impl IntoResponse {
-    let response = state.service.get_token_multiplier();
+pub async fn get_multipliers(State(state): State<AdminState>) -> impl IntoResponse {
+    let response = state.service.get_multipliers();
     Json(response)
 }
 
-/// PUT /api/admin/config/token-multiplier
+/// PUT /api/admin/config/multipliers
 /// 设置 Token 倍率
-pub async fn set_token_multiplier(
+pub async fn set_multipliers(
     State(state): State<AdminState>,
-    Json(payload): Json<SetTokenMultiplierRequest>,
+    Json(payload): Json<SetMultipliersRequest>,
 ) -> impl IntoResponse {
-    match state.service.set_token_multiplier(payload) {
+    match state.service.set_multipliers(payload) {
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }

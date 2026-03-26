@@ -425,7 +425,8 @@ pub async fn post_messages(
     let usage_tracker = state.usage_tracker.clone();
 
     // 获取 Token 倍率
-    let token_multiplier = provider.token_manager().get_token_multiplier();
+    let input_multiplier = provider.token_manager().get_input_multiplier();
+    let output_multiplier = provider.token_manager().get_output_multiplier();
 
     if payload.stream {
         // 流式响应
@@ -438,7 +439,8 @@ pub async fn post_messages(
             thinking_enabled,
             usage_tracker,
             api_key_id,
-            token_multiplier,
+            input_multiplier,
+            output_multiplier,
         )
         .await
     } else {
@@ -451,7 +453,8 @@ pub async fn post_messages(
             cache_read_tokens,
             usage_tracker,
             api_key_id,
-            token_multiplier,
+            input_multiplier,
+            output_multiplier,
         )
         .await
     }
@@ -467,7 +470,8 @@ async fn handle_stream_request(
     thinking_enabled: bool,
     usage_tracker: Option<std::sync::Arc<crate::model::usage::UsageTracker>>,
     api_key_id: Option<u32>,
-    token_multiplier: f64,
+    input_multiplier: f64,
+    output_multiplier: f64,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let response = match provider.call_api_stream(request_body).await {
@@ -479,7 +483,7 @@ async fn handle_stream_request(
     let mut ctx = StreamContext::new_with_thinking(model, input_tokens, thinking_enabled)
         .with_cache_read_tokens(cache_read_tokens)
         .with_usage_tracking(usage_tracker, api_key_id)
-        .with_token_multiplier(token_multiplier);
+        .with_multipliers(input_multiplier, output_multiplier);
 
     // 生成初始事件
     let initial_events = ctx.generate_initial_events();
@@ -609,7 +613,8 @@ async fn handle_non_stream_request(
     cache_read_tokens: i32,
     usage_tracker: Option<std::sync::Arc<crate::model::usage::UsageTracker>>,
     api_key_id: Option<u32>,
-    token_multiplier: f64,
+    input_multiplier: f64,
+    output_multiplier: f64,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let response = match provider.call_api(request_body).await {
@@ -759,8 +764,8 @@ async fn handle_non_stream_request(
     }
 
     // 构建 Anthropic 响应（应用 Token 倍率）
-    let reported_input = (final_input_tokens as f64 * token_multiplier) as i32;
-    let reported_output = (output_tokens as f64 * token_multiplier) as i32;
+    let reported_input = (final_input_tokens as f64 * input_multiplier) as i32;
+    let reported_output = (output_tokens as f64 * output_multiplier) as i32;
     let response_body = json!({
         "id": format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
         "type": "message",
@@ -962,7 +967,8 @@ pub async fn post_messages_cc(
     let usage_tracker = state.usage_tracker.clone();
 
     // 获取 Token 倍率
-    let token_multiplier = provider.token_manager().get_token_multiplier();
+    let input_multiplier = provider.token_manager().get_input_multiplier();
+    let output_multiplier = provider.token_manager().get_output_multiplier();
 
     if payload.stream {
         // 流式响应（缓冲模式）
@@ -975,7 +981,8 @@ pub async fn post_messages_cc(
             thinking_enabled,
             usage_tracker.clone(),
             api_key_id,
-            token_multiplier,
+            input_multiplier,
+            output_multiplier,
         )
         .await
     } else {
@@ -988,7 +995,8 @@ pub async fn post_messages_cc(
             cache_read_tokens,
             usage_tracker,
             api_key_id,
-            token_multiplier,
+            input_multiplier,
+            output_multiplier,
         )
         .await
     }
@@ -1007,7 +1015,8 @@ async fn handle_stream_request_buffered(
     thinking_enabled: bool,
     usage_tracker: Option<std::sync::Arc<crate::model::usage::UsageTracker>>,
     api_key_id: Option<u32>,
-    token_multiplier: f64,
+    input_multiplier: f64,
+    output_multiplier: f64,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let response = match provider.call_api_stream(request_body).await {
@@ -1019,7 +1028,7 @@ async fn handle_stream_request_buffered(
     let ctx = BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled)
         .with_cache_read_tokens(cache_read_tokens)
         .with_usage_tracking(usage_tracker, api_key_id)
-        .with_token_multiplier(token_multiplier);
+        .with_multipliers(input_multiplier, output_multiplier);
 
     // 创建缓冲 SSE 流
     let stream = create_buffered_sse_stream(response, ctx);

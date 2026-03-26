@@ -601,8 +601,8 @@ fn create_sse_stream(
     initial_stream.chain(processing_stream)
 }
 
-/// 上下文窗口大小（200k tokens）
-const CONTEXT_WINDOW_SIZE: i32 = 200_000;
+/// 上下文窗口大小（1M tokens）
+const CONTEXT_WINDOW_SIZE: i32 = 1_000_000;
 
 /// 处理非流式请求
 async fn handle_non_stream_request(

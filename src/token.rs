@@ -105,7 +105,7 @@ pub fn count_tokens(text: &str) -> u64 {
 /// 估算请求的输入 tokens
 ///
 /// 优先调用远程 API，失败时回退到本地计算
-pub(crate) fn count_all_tokens(
+pub(crate) async fn count_all_tokens(
     model: String,
     system: Option<Vec<SystemMessage>>,
     messages: Vec<Message>,
@@ -114,12 +114,10 @@ pub(crate) fn count_all_tokens(
     // 检查是否配置了远程 API
     if let Some(config) = get_config() {
         if let Some(api_url) = &config.api_url {
-            // 尝试调用远程 API
-            let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(call_remote_count_tokens(
-                    api_url, config, model, &system, &messages, &tools,
-                ))
-            });
+            // 异步调用远程 API（不再阻塞当前线程）
+            let result = call_remote_count_tokens(
+                api_url, config, model, &system, &messages, &tools,
+            ).await;
 
             match result {
                 Ok(tokens) => {

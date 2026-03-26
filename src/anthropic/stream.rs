@@ -1121,29 +1121,30 @@ impl StreamContext {
     }
 }
 
-/// 缓冲流处理上下文 - 用于 /cc/v1/messages 流式请求
+/// 延迟流处理上下文 - 用于 /cc/v1/messages 流式请求
 ///
-/// 与 `StreamContext` 不同，此上下文会缓冲所有事件直到流结束，
-/// 然后用从 `contextUsageEvent` 计算的正确 `input_tokens` 更正 `message_start` 事件。
+/// 与 `BufferedStreamContext`（旧实现，等整个流结束才发送）不同，
+/// 此上下文采用「延迟发送 message_start」策略：
+/// - **Buffering 阶段**：缓冲事件，等待 `contextUsageEvent` 提供准确的 `input_tokens`
+/// - **Streaming 阶段**：收到 `contextUsageEvent` 后，用正确的 `input_tokens` 更新
+///   `message_start`，flush 所有缓冲事件，之后实时透传
 ///
-/// 工作流程：
-/// 1. 使用 `StreamContext` 正常处理所有 Kiro 事件
-/// 2. 把生成的 SSE 事件缓存起来（而不是立即发送）
-/// 3. 流结束时，找到 `message_start` 事件并更新其 `input_tokens`
-/// 4. 一次性返回所有事件
-pub struct BufferedStreamContext {
+/// 这样首字时间从「等整个响应生成完毕」缩短为「等收到 contextUsageEvent」。
+pub struct DelayedStreamContext {
     /// 内部流处理上下文（复用现有的事件处理逻辑）
     inner: StreamContext,
-    /// 缓冲的所有事件（包括 message_start、content_block_start 等）
+    /// 缓冲的事件（仅在 Buffering 阶段使用）
     event_buffer: Vec<SseEvent>,
-    /// 估算的 input_tokens（用于回退）
+    /// 估算的 input_tokens（用于兜底）
     estimated_input_tokens: i32,
     /// 是否已经生成了初始事件
     initial_events_generated: bool,
+    /// 是否已切换到 Streaming 阶段（收到 contextUsageEvent 后为 true）
+    streaming: bool,
 }
 
-impl BufferedStreamContext {
-    /// 创建缓冲流上下文
+impl DelayedStreamContext {
+    /// 创建延迟流上下文
     pub fn new(
         model: impl Into<String>,
         estimated_input_tokens: i32,
@@ -1156,6 +1157,7 @@ impl BufferedStreamContext {
             event_buffer: Vec::new(),
             estimated_input_tokens,
             initial_events_generated: false,
+            streaming: false,
         }
     }
 
@@ -1181,50 +1183,22 @@ impl BufferedStreamContext {
         self
     }
 
-    /// 处理 Kiro 事件并缓冲结果
-    ///
-    /// 复用 StreamContext 的事件处理逻辑，但把结果缓存而不是立即发送。
-    pub fn process_and_buffer(&mut self, event: &crate::kiro::model::events::Event) {
-        // 首次处理事件时，先生成初始事件（message_start 等）
-        if !self.initial_events_generated {
-            let initial_events = self.inner.generate_initial_events();
-            self.event_buffer.extend(initial_events);
-            self.initial_events_generated = true;
-        }
-
-        // 处理事件并缓冲结果
-        let events = self.inner.process_kiro_event(event);
-        self.event_buffer.extend(events);
+    /// 是否已进入 Streaming 阶段
+    pub fn is_streaming(&self) -> bool {
+        self.streaming
     }
 
-    /// 完成流处理并返回所有事件
-    ///
-    /// 此方法会：
-    /// 1. 生成最终事件（message_delta, message_stop）
-    /// 2. 用正确的 input_tokens 更正 message_start 事件
-    /// 3. 返回所有缓冲的事件
-    pub fn finish_and_get_all_events(&mut self) -> Vec<SseEvent> {
-        // 如果从未处理过事件，也要生成初始事件
+    /// 确保初始事件已生成
+    fn ensure_initial_events(&mut self) {
         if !self.initial_events_generated {
             let initial_events = self.inner.generate_initial_events();
             self.event_buffer.extend(initial_events);
             self.initial_events_generated = true;
         }
+    }
 
-        // 生成最终事件
-        let final_events = self.inner.generate_final_events();
-        self.event_buffer.extend(final_events);
-
-        // 获取正确的 input_tokens
-        let final_input_tokens = self
-            .inner
-            .context_input_tokens
-            .unwrap_or(self.estimated_input_tokens);
-
-        // 应用 Token 倍率
-        let reported_input = (final_input_tokens as f64 * self.inner.input_multiplier) as i32;
-
-        // 更正 message_start 事件中的 input_tokens
+    /// 更正缓冲区中 message_start 事件的 input_tokens
+    fn correct_message_start_input_tokens(&mut self, reported_input: i32) {
         for event in &mut self.event_buffer {
             if event.event == "message_start" {
                 if let Some(message) = event.data.get_mut("message") {
@@ -1234,6 +1208,77 @@ impl BufferedStreamContext {
                 }
             }
         }
+    }
+
+    /// 处理 Kiro 事件
+    ///
+    /// - Buffering 阶段：缓冲事件，检测 contextUsageEvent 触发切换
+    /// - Streaming 阶段：直接返回事件（实时透传）
+    ///
+    /// 返回值：需要立即发送给客户端的事件列表
+    pub fn process_event(&mut self, event: &crate::kiro::model::events::Event) -> Vec<SseEvent> {
+        self.ensure_initial_events();
+
+        if self.streaming {
+            // Streaming 阶段：直接返回事件
+            return self.inner.process_kiro_event(event);
+        }
+
+        // Buffering 阶段：处理事件并缓冲
+        let sse_events = self.inner.process_kiro_event(event);
+        self.event_buffer.extend(sse_events);
+
+        // 检查是否收到了 contextUsageEvent（inner 会设置 context_input_tokens）
+        if self.inner.context_input_tokens.is_some() {
+            // 切换到 Streaming 阶段
+            self.streaming = true;
+
+            // 用正确的 input_tokens 更正 message_start
+            let final_input_tokens = self.inner.context_input_tokens.unwrap();
+            let reported_input = (final_input_tokens as f64 * self.inner.input_multiplier) as i32;
+            self.correct_message_start_input_tokens(reported_input);
+
+            tracing::info!(
+                "DelayedStreamContext: 收到 contextUsageEvent，切换到 Streaming 阶段，input_tokens={}",
+                final_input_tokens
+            );
+
+            // flush 所有缓冲事件
+            return std::mem::take(&mut self.event_buffer);
+        }
+
+        // 还在 Buffering，不返回任何事件
+        Vec::new()
+    }
+
+    /// 完成流处理并返回剩余事件
+    ///
+    /// 如果还在 Buffering 阶段（未收到 contextUsageEvent），使用估算值兜底
+    pub fn finish(&mut self) -> Vec<SseEvent> {
+        self.ensure_initial_events();
+
+        // 生成最终事件
+        let final_events = self.inner.generate_final_events();
+
+        if self.streaming {
+            // 已在 Streaming 阶段，直接返回最终事件
+            return final_events;
+        }
+
+        // 还在 Buffering 阶段（未收到 contextUsageEvent），使用估算值兜底
+        self.event_buffer.extend(final_events);
+
+        let final_input_tokens = self
+            .inner
+            .context_input_tokens
+            .unwrap_or(self.estimated_input_tokens);
+        let reported_input = (final_input_tokens as f64 * self.inner.input_multiplier) as i32;
+        self.correct_message_start_input_tokens(reported_input);
+
+        tracing::warn!(
+            "DelayedStreamContext: 流结束仍未收到 contextUsageEvent，使用估算值 input_tokens={}",
+            final_input_tokens
+        );
 
         std::mem::take(&mut self.event_buffer)
     }

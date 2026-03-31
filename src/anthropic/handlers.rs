@@ -402,13 +402,22 @@ pub async fn post_messages(
     // 估算最后一条消息的 tokens（非缓存部分）
     let last_msg_tokens = token::count_last_message_tokens(&payload.messages) as i32;
 
-    // 估算输入 tokens
+    // 估算输入 tokens（诊断：记录耗时）
+    let t_count_start = std::time::Instant::now();
     let input_tokens = token::count_all_tokens(
         payload.model.clone(),
         payload.system,
         payload.messages,
         payload.tools,
     ).await as i32;
+    let count_tokens_ms = t_count_start.elapsed().as_millis();
+    if count_tokens_ms > 500 {
+        tracing::warn!(
+            count_tokens_ms = count_tokens_ms,
+            input_tokens = input_tokens,
+            "count_all_tokens 耗时过长"
+        );
+    }
 
     // 缓存命中 tokens = 总 input - 最后一条消息
     let cache_read_tokens = (input_tokens - last_msg_tokens).max(0);
@@ -944,13 +953,22 @@ pub async fn post_messages_cc(
     // 估算最后一条消息的 tokens（非缓存部分）
     let last_msg_tokens = token::count_last_message_tokens(&payload.messages) as i32;
 
-    // 估算输入 tokens
+    // 估算输入 tokens（诊断：记录耗时）
+    let t_count_start = std::time::Instant::now();
     let input_tokens = token::count_all_tokens(
         payload.model.clone(),
         payload.system,
         payload.messages,
         payload.tools,
     ).await as i32;
+    let count_tokens_ms = t_count_start.elapsed().as_millis();
+    if count_tokens_ms > 500 {
+        tracing::warn!(
+            count_tokens_ms = count_tokens_ms,
+            input_tokens = input_tokens,
+            "count_all_tokens 耗时过长"
+        );
+    }
 
     // 缓存命中 tokens = 总 input - 最后一条消息
     let cache_read_tokens = (input_tokens - last_msg_tokens).max(0);

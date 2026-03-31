@@ -455,7 +455,12 @@ impl KiroProvider {
         request_body: &str,
         is_stream: bool,
     ) -> anyhow::Result<reqwest::Response> {
+        let t_sem_start = std::time::Instant::now();
         let _permit = self.concurrency_limit.acquire().await?;
+        let sem_wait_ms = t_sem_start.elapsed().as_millis();
+        if sem_wait_ms > 100 {
+            tracing::warn!(sem_wait_ms = sem_wait_ms, "信号量等待耗时过长");
+        }
         let total_credentials = self.token_manager.total_count();
         let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
         let mut last_error: Option<anyhow::Error> = None;
@@ -466,6 +471,7 @@ impl KiroProvider {
 
         for attempt in 0..max_retries {
             // 获取调用上下文（绑定 index、credentials、token）
+            let t_ctx_start = std::time::Instant::now();
             let ctx = match self.token_manager.acquire_context(model.as_deref()).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -473,6 +479,10 @@ impl KiroProvider {
                     continue;
                 }
             };
+            let ctx_ms = t_ctx_start.elapsed().as_millis();
+            if ctx_ms > 500 {
+                tracing::warn!(acquire_context_ms = ctx_ms, "acquire_context 耗时过长");
+            }
 
             let url = self.base_url_for(&ctx.credentials);
             let headers = match self.build_headers(&ctx) {

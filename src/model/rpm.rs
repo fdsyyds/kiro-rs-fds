@@ -4,7 +4,7 @@
 //! 支持全局、按凭据、按 API Key 三个维度。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -88,7 +88,7 @@ impl RpmTracker {
     /// 记录全局 RPM 和 per-API-Key RPM
     pub fn record_request(&self, api_key_id: Option<u32>) {
         let now = Instant::now();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.global.record(now);
         if let Some(key_id) = api_key_id {
             inner
@@ -102,7 +102,7 @@ impl RpmTracker {
     /// 记录凭据维度的请求（在 provider 成功调用后调用）
     pub fn record_credential(&self, credential_id: u64) {
         let now = Instant::now();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner
             .by_credential
             .entry(credential_id)
@@ -113,7 +113,7 @@ impl RpmTracker {
     /// 获取当前 RPM 快照
     pub fn snapshot(&self) -> RpmSnapshot {
         let now = Instant::now();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
 
         let global = inner.global.count(now);
 

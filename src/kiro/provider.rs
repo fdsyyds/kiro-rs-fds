@@ -28,7 +28,8 @@ const MAX_RETRIES_PER_CREDENTIAL: usize = 3;
 const MAX_TOTAL_RETRIES: usize = 9;
 
 /// 最大并发请求数（同时发往上游的请求上限）
-const MAX_CONCURRENT_REQUESTS: usize = 50;
+/// 流式请求可能持续 30-60 秒，RPM 100 时同时活跃请求可达 100-200
+const MAX_CONCURRENT_REQUESTS: usize = 200;
 
 /// Kiro API Provider
 ///

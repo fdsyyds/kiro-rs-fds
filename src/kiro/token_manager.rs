@@ -12,6 +12,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
 
@@ -525,8 +526,8 @@ pub struct MultiTokenManager {
     entries: Mutex<Vec<CredentialEntry>>,
     /// 当前活动凭据 ID
     current_id: Mutex<u64>,
-    /// Token 刷新锁，确保同一时间只有一个刷新操作
-    refresh_lock: TokioMutex<()>,
+    /// Per-凭据刷新锁，不同凭据的 Token 刷新可以并行进行
+    refresh_locks: Mutex<HashMap<u64, Arc<TokioMutex<()>>>>,
     /// 凭据文件路径（用于回写）
     credentials_path: Option<PathBuf>,
     /// 是否为多凭据格式（数组格式才回写）
@@ -649,7 +650,7 @@ impl MultiTokenManager {
             proxy,
             entries: Mutex::new(entries),
             current_id: Mutex::new(initial_id),
-            refresh_lock: TokioMutex::new(()),
+            refresh_locks: Mutex::new(HashMap::new()),
             credentials_path,
             is_multiple_format: AtomicBool::new(is_multiple_format),
             load_balancing_mode: Mutex::new(load_balancing_mode),
@@ -770,22 +771,24 @@ impl MultiTokenManager {
 
         loop {
             if tried_count >= total {
+                let available = self.available_count();
                 anyhow::bail!(
                     "所有凭据均无法获取有效 Token（可用: {}/{}）",
-                    self.available_count(),
+                    available,
                     total
                 );
             }
 
             let (id, credentials) = {
-                let is_balanced = self.load_balancing_mode.lock().as_str() == "balanced";
+                // 单次锁操作完成所有凭据选择逻辑
+                let mut entries = self.entries.lock();
+                let mode = self.load_balancing_mode.lock().clone();
+                let is_balanced = mode.as_str() == "balanced";
 
-                // balanced 模式：每次请求都轮询选择，不固定 current_id
                 // priority 模式：优先使用 current_id 指向的凭据
                 let current_hit = if is_balanced {
                     None
                 } else {
-                    let entries = self.entries.lock();
                     let current_id = *self.current_id.lock();
                     entries
                         .iter()
@@ -796,12 +799,37 @@ impl MultiTokenManager {
                 if let Some(hit) = current_hit {
                     hit
                 } else {
-                    // 当前凭据不可用或 balanced 模式，根据负载均衡策略选择
-                    let mut best = self.select_next_credential(model);
+                    // 内联凭据选择逻辑，避免调用 select_next_credential 再次加锁
+                    let is_opus = model
+                        .map(|m| m.to_lowercase().contains("opus"))
+                        .unwrap_or(false);
+
+                    let available: Vec<_> = entries
+                        .iter()
+                        .filter(|e| {
+                            if e.disabled {
+                                return false;
+                            }
+                            if is_opus && !e.credentials.supports_opus() {
+                                return false;
+                            }
+                            true
+                        })
+                        .collect();
+
+                    let best = if available.is_empty() {
+                        None
+                    } else if is_balanced {
+                        let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) as usize;
+                        let entry = &available[idx % available.len()];
+                        Some((entry.id, entry.credentials.clone()))
+                    } else {
+                        available.iter().min_by_key(|e| e.credentials.priority)
+                            .map(|e| (e.id, e.credentials.clone()))
+                    };
 
                     // 没有可用凭据：如果是"自动禁用导致全灭"，做一次类似重启的自愈
-                    if best.is_none() {
-                        let mut entries = self.entries.lock();
+                    let best = if best.is_none() {
                         if entries.iter().any(|e| {
                             e.disabled && e.disabled_reason == Some(DisabledReason::TooManyFailures)
                         }) {
@@ -815,21 +843,41 @@ impl MultiTokenManager {
                                     e.failure_count = 0;
                                 }
                             }
-                            drop(entries);
-                            best = self.select_next_credential(model);
+                            // 自愈后重新选择
+                            let available: Vec<_> = entries
+                                .iter()
+                                .filter(|e| {
+                                    if e.disabled {
+                                        return false;
+                                    }
+                                    if is_opus && !e.credentials.supports_opus() {
+                                        return false;
+                                    }
+                                    true
+                                })
+                                .collect();
+                            if available.is_empty() {
+                                None
+                            } else if is_balanced {
+                                let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) as usize;
+                                let entry = &available[idx % available.len()];
+                                Some((entry.id, entry.credentials.clone()))
+                            } else {
+                                available.iter().min_by_key(|e| e.credentials.priority)
+                                    .map(|e| (e.id, e.credentials.clone()))
+                            }
+                        } else {
+                            None
                         }
-                    }
+                    } else {
+                        best
+                    };
 
                     if let Some((new_id, new_creds)) = best {
-                        // 更新 current_id
                         let mut current_id = self.current_id.lock();
                         *current_id = new_id;
                         (new_id, new_creds)
                     } else {
-                        let entries = self.entries.lock();
-                        // 注意：必须在 bail! 之前计算 available_count，
-                        // 因为 available_count() 会尝试获取 entries 锁，
-                        // 而此时我们已经持有该锁，会导致死锁
                         let available = entries.iter().filter(|e| !e.disabled).count();
                         anyhow::bail!("所有凭据均已禁用（{}/{}）", available, total);
                     }
@@ -914,8 +962,12 @@ impl MultiTokenManager {
         let needs_refresh = is_token_expired(credentials) || is_token_expiring_soon(credentials);
 
         let creds = if needs_refresh {
-            // 获取刷新锁，确保同一时间只有一个刷新操作
-            let _guard = self.refresh_lock.lock().await;
+            // 获取 per-凭据刷新锁，不同凭据的刷新可以并行
+            let lock = {
+                let mut locks = self.refresh_locks.lock();
+                locks.entry(id).or_insert_with(|| Arc::new(TokioMutex::new(()))).clone()
+            };
+            let _guard = lock.lock().await;
 
             // 第二次检查：获取锁后重新读取凭据，因为其他请求可能已经完成刷新
             let current_creds = {
@@ -1425,7 +1477,12 @@ impl MultiTokenManager {
         let needs_refresh = is_token_expired(&credentials) || is_token_expiring_soon(&credentials);
 
         let token = if needs_refresh {
-            let _guard = self.refresh_lock.lock().await;
+            // 获取 per-凭据刷新锁，不同凭据的刷新可以并行
+            let lock = {
+                let mut locks = self.refresh_locks.lock();
+                locks.entry(id).or_insert_with(|| Arc::new(TokioMutex::new(()))).clone()
+            };
+            let _guard = lock.lock().await;
             let current_creds = {
                 let entries = self.entries.lock();
                 entries

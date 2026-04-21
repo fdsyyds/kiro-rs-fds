@@ -78,6 +78,7 @@ Complete all chunked operations without commentary.";
 /// - sonnet 4.6/4-6 → claude-sonnet-4.6
 /// - 其他 sonnet → claude-sonnet-4.5
 /// - opus 4.5/4-5 → claude-opus-4.5
+/// - opus 4.7/4-7 → claude-opus-4.7
 /// - 其他 opus → claude-opus-4.6
 /// - 所有 haiku → claude-haiku-4.5
 pub fn map_model(model: &str) -> Option<String> {
@@ -92,6 +93,8 @@ pub fn map_model(model: &str) -> Option<String> {
     } else if model_lower.contains("opus") {
         if model_lower.contains("4-5") || model_lower.contains("4.5") {
             Some("claude-opus-4.5".to_string())
+        } else if model_lower.contains("4-7") || model_lower.contains("4.7") {
+            Some("claude-opus-4.7".to_string())
         } else {
             Some("claude-opus-4.6".to_string())
         }

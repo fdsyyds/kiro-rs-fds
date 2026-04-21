@@ -771,12 +771,7 @@ impl MultiTokenManager {
 
         loop {
             if tried_count >= total {
-                let available = self.available_count();
-                anyhow::bail!(
-                    "所有凭据均无法获取有效 Token（可用: {}/{}）",
-                    available,
-                    total
-                );
+                anyhow::bail!("所有凭据均无法获取有效 Token");
             }
 
             let (id, credentials) = {
@@ -878,8 +873,7 @@ impl MultiTokenManager {
                         *current_id = new_id;
                         (new_id, new_creds)
                     } else {
-                        let available = entries.iter().filter(|e| !e.disabled).count();
-                        anyhow::bail!("所有凭据均已禁用（{}/{}）", available, total);
+                        anyhow::bail!("所有凭据均已禁用");
                     }
                 }
             };

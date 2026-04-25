@@ -31,7 +31,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [batchImportDialogOpen, setBatchImportDialogOpen] = useState(false)
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'disabled' | 'failed'>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
@@ -68,6 +68,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
     if (statusFilter === 'active') return !c.disabled && c.failureCount === 0
     if (statusFilter === 'disabled') return c.disabled
     if (statusFilter === 'failed') return c.failureCount > 0 && !c.disabled
+    if (statusFilter.startsWith('tier:')) {
+      const tier = statusFilter.slice(5).toLowerCase()
+      return c.subscriptionTitle?.toLowerCase().includes(tier)
+    }
     return true
   })
   const totalPages = Math.ceil(filteredCredentials.length / itemsPerPage)
@@ -76,6 +80,13 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const currentCredentials = filteredCredentials.slice(startIndex, endIndex)
   const disabledCredentialCount = data?.credentials.filter(credential => credential.disabled).length || 0
   const failedCredentialCount = data?.credentials.filter(c => c.failureCount > 0 && !c.disabled).length || 0
+
+  // 订阅等级统计
+  const tierCounts = (data?.credentials || []).reduce<Record<string, number>>((acc, c) => {
+    const tier = c.subscriptionTitle || '未知'
+    acc[tier] = (acc[tier] || 0) + 1
+    return acc
+  }, {})
   const selectedDisabledCount = Array.from(selectedIds).filter(id => {
     const credential = data?.credentials.find(c => c.id === id)
     return Boolean(credential?.disabled)
@@ -637,7 +648,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.3.8</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.3.9</span>
             <Button
               variant="outline"
               size="sm"
@@ -724,10 +735,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
               {/* 状态筛选 */}
               <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
                 {([
-                  { key: 'all' as const, label: '全部', count: data?.credentials.length || 0 },
-                  { key: 'active' as const, label: '正常', count: (data?.credentials.length || 0) - disabledCredentialCount - failedCredentialCount },
-                  { key: 'disabled' as const, label: '禁用', count: disabledCredentialCount },
-                  { key: 'failed' as const, label: '异常', count: failedCredentialCount },
+                  { key: 'all', label: '全部', count: data?.credentials.length || 0 },
+                  { key: 'active', label: '正常', count: (data?.credentials.length || 0) - disabledCredentialCount - failedCredentialCount },
+                  { key: 'disabled', label: '禁用', count: disabledCredentialCount },
+                  { key: 'failed', label: '异常', count: failedCredentialCount },
                 ]).map(({ key, label, count }) => (
                   <button
                     key={key}
@@ -742,54 +753,29 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     {count > 0 && <span className="ml-1 text-[10px] opacity-60">{count}</span>}
                   </button>
                 ))}
+                {Object.keys(tierCounts).length > 0 && (
+                  <div className="w-px h-4 bg-border mx-0.5" />
+                )}
+                {Object.entries(tierCounts).map(([tier, count]) => {
+                  const key = `tier:${tier.toLowerCase()}`
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setStatusFilter(statusFilter === key ? 'all' : key)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                        statusFilter === key
+                          ? 'bg-background shadow-sm text-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {tier}
+                      <span className="ml-1 text-[10px] opacity-60">{count}</span>
+                    </button>
+                  )
+                })}
               </div>
-              {selectedIds.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">已选择 {selectedIds.size} 个</Badge>
-                  <Button
-                    onClick={() => {
-                      const allIds = new Set(data?.credentials.map(c => c.id) || [])
-                      setSelectedIds(allIds)
-                    }}
-                    size="sm"
-                    variant="ghost"
-                    disabled={selectedIds.size === (data?.credentials.length || 0)}
-                  >
-                    全选
-                  </Button>
-                  <Button onClick={deselectAll} size="sm" variant="ghost">
-                    取消选择
-                  </Button>
-                </div>
-              )}
             </div>
             <div className="flex flex-wrap gap-2">
-              {selectedIds.size > 0 && (
-                <>
-                  <Button onClick={handleBatchVerify} size="sm" variant="outline">
-                    <CheckCircle2 className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">批量验活</span>
-                  </Button>
-                  <Button onClick={() => handleExportCredentials(false)} size="sm" variant="outline">
-                    <Download className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">导出已选</span>
-                  </Button>
-                  <Button onClick={handleBatchResetFailure} size="sm" variant="outline">
-                    <RotateCcw className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">恢复异常</span>
-                  </Button>
-                  <Button
-                    onClick={handleBatchDelete}
-                    size="sm"
-                    variant="destructive"
-                    disabled={selectedDisabledCount === 0}
-                    title={selectedDisabledCount === 0 ? '只能删除已禁用凭据' : undefined}
-                  >
-                    <Trash2 className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">批量删除</span>
-                  </Button>
-                </>
-              )}
               {verifying && !verifyDialogOpen && (
                 <Button onClick={() => setVerifyDialogOpen(true)} size="sm" variant="secondary">
                   <CheckCircle2 className="h-4 w-4 mr-2 animate-spin" />
@@ -846,18 +832,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
             </Card>
           ) : (
             <>
-              {/* 列表表头 */}
-              <div className="hidden md:flex items-center gap-3 px-3 py-1.5 text-[11px] text-muted-foreground uppercase tracking-wider border-b">
-                <div className="w-4" />
-                <div className="w-2" />
-                <div className="flex-1">邮箱</div>
-                <div className="w-[100px] text-right">已用</div>
-                <div className="hidden lg:block w-12 text-right">RPM</div>
-                <div className="hidden lg:block w-10 text-right">调用</div>
-                <div className="hidden xl:block w-14 text-right">成功</div>
-                <div className="w-7" />
-              </div>
-              <div className="space-y-1">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-1">
                 {currentCredentials.map((credential) => (
                   <CredentialCard
                     key={credential.id}
@@ -903,6 +878,49 @@ export function Dashboard({ onLogout }: DashboardProps) {
         </>
         )}
       </main>
+
+      {/* 底部浮动操作栏 */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 fade-in-0 duration-200">
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl border bg-background/95 backdrop-blur shadow-lg">
+            <Badge variant="secondary" className="shrink-0">已选 {selectedIds.size}</Badge>
+            <Button
+              onClick={() => {
+                const allIds = new Set(data?.credentials.map(c => c.id) || [])
+                setSelectedIds(allIds)
+              }}
+              size="sm"
+              variant="ghost"
+              disabled={selectedIds.size === (data?.credentials.length || 0)}
+            >
+              全选
+            </Button>
+            <div className="w-px h-5 bg-border" />
+            <Button onClick={handleBatchVerify} size="sm" variant="outline">
+              <CheckCircle2 className="h-4 w-4 mr-1" />验活
+            </Button>
+            <Button onClick={() => handleExportCredentials(false)} size="sm" variant="outline">
+              <Download className="h-4 w-4 mr-1" />导出
+            </Button>
+            <Button onClick={handleBatchResetFailure} size="sm" variant="outline">
+              <RotateCcw className="h-4 w-4 mr-1" />恢复
+            </Button>
+            <Button
+              onClick={handleBatchDelete}
+              size="sm"
+              variant="destructive"
+              disabled={selectedDisabledCount === 0}
+              title={selectedDisabledCount === 0 ? '只能删除已禁用凭据' : undefined}
+            >
+              <Trash2 className="h-4 w-4 mr-1" />删除
+            </Button>
+            <div className="w-px h-5 bg-border" />
+            <Button onClick={deselectAll} size="sm" variant="ghost">
+              取消
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* 余额对话框 */}
       <BalanceDialog

@@ -91,6 +91,7 @@ impl AdminService {
                 has_proxy: entry.has_proxy,
                 proxy_url: entry.proxy_url,
                 client_id: entry.client_id,
+                subscription_title: entry.subscription_title,
             })
             .collect();
 

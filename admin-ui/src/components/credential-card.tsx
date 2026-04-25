@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
-import { MoreHorizontal, RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2, Pencil, Power, PowerOff } from 'lucide-react'
+import { MoreHorizontal, RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
@@ -55,7 +56,9 @@ function formatUsage(value: number): string {
 // 下拉菜单组件
 function DropdownMenu({ children, trigger }: { children: React.ReactNode, trigger: React.ReactNode }) {
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -66,11 +69,23 @@ function DropdownMenu({ children, trigger }: { children: React.ReactNode, trigge
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
+  useEffect(() => {
+    if (!open || !ref.current) return
+    const rect = ref.current.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom
+    setDropUp(spaceBelow < 250)
+  }, [open])
+
   return (
     <div ref={ref} className="relative">
       <div onClick={() => setOpen(!open)}>{trigger}</div>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-md border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95">
+        <div
+          ref={menuRef}
+          className={`absolute right-0 z-50 min-w-[160px] rounded-md border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95 ${
+            dropUp ? 'bottom-full mb-1' : 'top-full mt-1'
+          }`}
+        >
           <div onClick={() => setOpen(false)}>{children}</div>
         </div>
       )}
@@ -114,15 +129,6 @@ export function CredentialCard({
   const resetFailure = useResetFailure()
   const deleteCredential = useDeleteCredential()
 
-  const handleToggleDisabled = () => {
-    setDisabled.mutate(
-      { id: credential.id, disabled: !credential.disabled },
-      {
-        onSuccess: (res) => toast.success(res.message),
-        onError: (err) => toast.error('操作失败: ' + (err as Error).message),
-      }
-    )
-  }
 
   const handleReset = () => {
     resetFailure.mutate(credential.id, {
@@ -181,7 +187,7 @@ export function CredentialCard({
         {/* 邮箱 + 标签 */}
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <span className="text-sm font-medium truncate">
-            {credential.email || `#${credential.id}`}
+            {`${credential.id}-${credential.email || '未知'}`}
           </span>
           {credential.isCurrent && (
             <Badge variant="success" className="shrink-0 text-[10px] px-1.5 py-0">活跃</Badge>
@@ -228,6 +234,22 @@ export function CredentialCard({
           </span>
         </div>
 
+        {/* 启用/禁用开关 */}
+        <Switch
+          checked={!credential.disabled}
+          onCheckedChange={() => {
+            setDisabled.mutate(
+              { id: credential.id, disabled: !credential.disabled },
+              {
+                onSuccess: (res) => toast.success(res.message),
+                onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+              }
+            )
+          }}
+          disabled={setDisabled.isPending}
+          className="shrink-0 scale-75"
+        />
+
         {/* 操作菜单 */}
         <DropdownMenu
           trigger={
@@ -241,12 +263,6 @@ export function CredentialCard({
           </DropdownItem>
           <DropdownItem onClick={() => setShowEditDialog(true)}>
             <Pencil className="h-3.5 w-3.5" />编辑
-          </DropdownItem>
-          <DropdownItem onClick={handleToggleDisabled} disabled={setDisabled.isPending}>
-            {credential.disabled
-              ? <><Power className="h-3.5 w-3.5" />启用</>
-              : <><PowerOff className="h-3.5 w-3.5" />禁用</>
-            }
           </DropdownItem>
           <DropdownItem
             onClick={() => {

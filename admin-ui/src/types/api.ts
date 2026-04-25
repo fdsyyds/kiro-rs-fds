@@ -23,6 +23,7 @@ export interface CredentialStatusItem {
   hasProxy: boolean
   proxyUrl?: string
   clientId?: string
+  subscriptionTitle?: string
 }
 export interface BalanceResponse {
   id: number

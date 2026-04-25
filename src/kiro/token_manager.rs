@@ -499,6 +499,9 @@ pub struct CredentialEntrySnapshot {
     /// OIDC Client ID（用于前端展示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// 订阅等级
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_title: Option<String>,
 }
 
 /// 凭据管理器状态快照
@@ -1389,6 +1392,7 @@ impl MultiTokenManager {
                     has_proxy: e.credentials.proxy_url.is_some(),
                     proxy_url: e.credentials.proxy_url.clone(),
                     client_id: e.credentials.client_id.clone(),
+                    subscription_title: e.credentials.subscription_title.clone(),
                 })
                 .collect(),
             current_id,

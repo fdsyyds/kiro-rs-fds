@@ -54,6 +54,9 @@ pub struct CredentialStatusItem {
     /// OIDC Client ID（用于前端展示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// 订阅等级
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_title: Option<String>,
 }
 
 /// 启用/禁用凭据请求

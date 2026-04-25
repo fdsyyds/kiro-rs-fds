@@ -147,7 +147,6 @@ export function CredentialCard({
   }
 
   // 状态颜色
-  const isHealthy = !credential.disabled && credential.failureCount === 0
   const hasFailure = credential.failureCount > 0
   const statusColor = credential.disabled
     ? 'bg-gray-400'

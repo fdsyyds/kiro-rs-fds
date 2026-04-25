@@ -172,6 +172,15 @@ pub struct UpdateCredentialRequest {
     pub proxy_password: Option<String>,
 }
 
+/// 导出凭据请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportCredentialsRequest {
+    /// 要导出的凭据 ID 列表（为空则导出全部）
+    #[serde(default)]
+    pub ids: Vec<u64>,
+}
+
 // ============ 余额查询 ============
 
 /// 余额查询响应

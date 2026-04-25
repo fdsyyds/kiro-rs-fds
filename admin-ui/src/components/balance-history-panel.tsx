@@ -123,7 +123,7 @@ export function BalanceHistoryPanel() {
                 <CardTitle className="flex items-center justify-between text-base">
                   <div className="flex items-center gap-2">
                     {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                    <span>凭据 #{credentialId}{credential?.clientId ? ` ${credential.clientId}` : ''}</span>
+                    <span>{credentialId}-{credential?.email || '未知'}</span>
                     {latest?.data.subscriptionTitle && (
                       <Badge variant="outline">{latest.data.subscriptionTitle}</Badge>
                     )}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, Key, BarChart3 } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Download, Trash2, RotateCcw, CheckCircle2, Key, BarChart3 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
@@ -15,7 +15,7 @@ import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-
 import { ApiKeysPanel } from '@/components/api-keys-panel'
 import { BalanceHistoryPanel } from '@/components/balance-history-panel'
 import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode, useRpm, useMultipliers, useSetMultipliers } from '@/hooks/use-credentials'
-import { getCredentialBalance } from '@/api/credentials'
+import { getCredentialBalance, exportCredentials } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
 import type { BalanceResponse } from '@/types/api'
 
@@ -300,6 +300,30 @@ export function Dashboard({ onLogout }: DashboardProps) {
     }
 
     deselectAll()
+  }
+
+  // 导出凭据
+  const handleExportCredentials = async (exportAll: boolean) => {
+    const ids = exportAll ? [] : Array.from(selectedIds)
+    if (!exportAll && ids.length === 0) {
+      toast.error('请先选择要导出的凭据')
+      return
+    }
+
+    try {
+      const credentials = await exportCredentials(ids)
+      const json = JSON.stringify(credentials, null, 2)
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `credentials-${new Date().toISOString().slice(0, 10)}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`已导出 ${credentials.length} 个凭据`)
+    } catch (error) {
+      toast.error('导出失败: ' + extractErrorMessage(error))
+    }
   }
 
   // 查询当前页凭据信息（逐个查询，避免瞬时并发）
@@ -605,7 +629,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.3.5</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.3.7</span>
             <Button
               variant="outline"
               size="sm"
@@ -705,6 +729,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     <CheckCircle2 className="h-4 w-4 sm:mr-2" />
                     <span className="hidden sm:inline">批量验活</span>
                   </Button>
+                  <Button onClick={() => handleExportCredentials(false)} size="sm" variant="outline">
+                    <Download className="h-4 w-4 sm:mr-2" />
+                    <span className="hidden sm:inline">导出已选</span>
+                  </Button>
                   <Button onClick={handleBatchResetFailure} size="sm" variant="outline">
                     <RotateCcw className="h-4 w-4 sm:mr-2" />
                     <span className="hidden sm:inline">恢复异常</span>
@@ -753,11 +781,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
               )}
               <Button onClick={() => setKamImportDialogOpen(true)} size="sm" variant="outline">
                 <FileUp className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Kiro Account Manager 导入</span>
+                <span className="hidden sm:inline">KAM 导入</span>
               </Button>
               <Button onClick={() => setBatchImportDialogOpen(true)} size="sm" variant="outline">
                 <Upload className="h-4 w-4 sm:mr-2" />
                 <span className="hidden sm:inline">批量导入</span>
+              </Button>
+              <Button onClick={() => handleExportCredentials(true)} size="sm" variant="outline">
+                <Download className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">导出全部</span>
               </Button>
               <Button onClick={() => setAddDialogOpen(true)} size="sm">
                 <Plus className="h-4 w-4 sm:mr-2" />

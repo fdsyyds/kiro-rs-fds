@@ -105,6 +105,11 @@ impl AdminService {
         }
     }
 
+    /// 导出指定凭据的完整数据
+    pub fn export_credentials(&self, ids: &[u64]) -> Vec<KiroCredentials> {
+        self.token_manager.export_credentials(ids)
+    }
+
     /// 设置凭据禁用状态
     pub fn set_disabled(&self, id: u64, disabled: bool) -> Result<(), AdminServiceError> {
         // 先获取当前凭据 ID，用于判断是否需要切换

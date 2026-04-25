@@ -138,7 +138,7 @@ fn default_tls_backend() -> TlsBackend {
 }
 
 fn default_load_balancing_mode() -> String {
-    "priority".to_string()
+    "balanced".to_string()
 }
 
 fn default_input_multiplier() -> f64 {

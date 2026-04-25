@@ -1397,6 +1397,28 @@ impl MultiTokenManager {
         }
     }
 
+    /// 导出指定凭据的完整数据（Admin API）
+    ///
+    /// 如果 ids 为空则导出全部凭据
+    pub fn export_credentials(&self, ids: &[u64]) -> Vec<KiroCredentials> {
+        let entries = self.entries.lock();
+        entries
+            .iter()
+            .filter(|e| ids.is_empty() || ids.contains(&e.id))
+            .map(|e| {
+                let mut creds = e.credentials.clone();
+                // 导出时不包含 access_token 和 expires_at（它们是临时的）
+                creds.access_token = None;
+                creds.expires_at = None;
+                creds.profile_arn = None;
+                creds.subscription_title = None;
+                creds.disabled = false;
+                creds.id = None;
+                creds
+            })
+            .collect()
+    }
+
     /// 设置凭据禁用状态（Admin API）
     pub fn set_disabled(&self, id: u64, disabled: bool) -> anyhow::Result<()> {
         {

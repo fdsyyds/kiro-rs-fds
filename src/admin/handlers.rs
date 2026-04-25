@@ -9,7 +9,8 @@ use axum::{
 use super::{
     middleware::AdminState,
     types::{
-        AddCredentialRequest, SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
+        AddCredentialRequest, ExportCredentialsRequest, SetDisabledRequest,
+        SetLoadBalancingModeRequest, SetPriorityRequest,
         SetMultipliersRequest, SuccessResponse, UpdateCredentialRequest,
     },
 };
@@ -19,6 +20,16 @@ use super::{
 pub async fn get_all_credentials(State(state): State<AdminState>) -> impl IntoResponse {
     let response = state.service.get_all_credentials();
     Json(response)
+}
+
+/// POST /api/admin/credentials/export
+/// 导出指定凭据的完整数据（包含敏感字段）
+pub async fn export_credentials(
+    State(state): State<AdminState>,
+    Json(payload): Json<ExportCredentialsRequest>,
+) -> impl IntoResponse {
+    let credentials = state.service.export_credentials(&payload.ids);
+    Json(credentials)
 }
 
 /// POST /api/admin/credentials/:id/disabled

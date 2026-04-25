@@ -98,6 +98,12 @@ export async function updateCredential(id: number, req: UpdateCredentialRequest)
   return data
 }
 
+// 导出凭据（包含敏感字段，和导入格式一致）
+export async function exportCredentials(ids: number[]): Promise<unknown[]> {
+  const { data } = await api.post<unknown[]>('/credentials/export', { ids })
+  return data
+}
+
 // 获取负载均衡模式
 export async function getLoadBalancingMode(): Promise<{ mode: 'priority' | 'balanced' }> {
   const { data } = await api.get<{ mode: 'priority' | 'balanced' }>('/config/load-balancing')

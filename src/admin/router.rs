@@ -11,9 +11,9 @@ use super::{
         list_api_keys, reset_key_usage, update_api_key,
     },
     handlers::{
-        add_credential, delete_credential, get_all_balance_history, get_all_credentials,
-        get_credential_balance, get_credential_balance_history, get_load_balancing_mode,
-        get_multipliers, reset_failure_count, set_credential_disabled,
+        add_credential, delete_credential, export_credentials, get_all_balance_history,
+        get_all_credentials, get_credential_balance, get_credential_balance_history,
+        get_load_balancing_mode, get_multipliers, reset_failure_count, set_credential_disabled,
         set_credential_priority, set_load_balancing_mode, set_multipliers,
         update_credential,
     },
@@ -29,6 +29,7 @@ pub fn create_admin_router(state: AdminState) -> Router {
             get(get_all_credentials).post(add_credential),
         )
         .route("/credentials/balance-history", get(get_all_balance_history))
+        .route("/credentials/export", post(export_credentials))
         .route("/credentials/{id}", delete(delete_credential).put(update_credential))
         .route("/credentials/{id}/disabled", post(set_credential_disabled))
         .route("/credentials/{id}/priority", post(set_credential_priority))

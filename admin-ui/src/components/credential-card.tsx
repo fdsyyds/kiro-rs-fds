@@ -143,7 +143,7 @@ export function CredentialCard({
                 onCheckedChange={onToggleSelect}
               />
               <CardTitle className="text-lg flex items-center gap-2">
-                {credential.email || `凭据 #${credential.id}`}
+                {`${credential.id}-${credential.email}`}
                 {credential.isCurrent && (
                   <Badge variant="success">当前</Badge>
                 )}

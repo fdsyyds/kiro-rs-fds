@@ -1549,33 +1549,41 @@ impl MultiTokenManager {
         let usage_limits = get_usage_limits(&credentials, &self.config, &token, effective_proxy.as_ref()).await?;
 
         // 更新订阅等级到凭据（仅在发生变化时持久化）
-        if let Some(subscription_title) = usage_limits.subscription_title() {
-            let changed = {
-                let mut entries = self.entries.lock();
-                if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
-                    let old_title = entry.credentials.subscription_title.clone();
-                    if old_title.as_deref() != Some(subscription_title) {
-                        entry.credentials.subscription_title =
-                            Some(subscription_title.to_string());
-                        tracing::info!(
-                            "凭据 #{} 订阅等级已更新: {:?} -> {}",
-                            id,
-                            old_title,
-                            subscription_title
-                        );
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            };
+        let mut need_persist = false;
 
-            if changed {
-                if let Err(e) = self.persist_credentials() {
-                    tracing::warn!("订阅等级更新后持久化失败（不影响本次请求）: {}", e);
+        if let Some(subscription_title) = usage_limits.subscription_title() {
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                let old_title = entry.credentials.subscription_title.clone();
+                if old_title.as_deref() != Some(subscription_title) {
+                    entry.credentials.subscription_title =
+                        Some(subscription_title.to_string());
+                    tracing::info!(
+                        "凭据 #{} 订阅等级已更新: {:?} -> {}",
+                        id,
+                        old_title,
+                        subscription_title
+                    );
+                    need_persist = true;
                 }
+            }
+        }
+
+        // 更新 email 到凭据（仅在凭据没有 email 时回填）
+        if let Some(email) = usage_limits.user_info.as_ref().and_then(|u| u.email.as_deref()) {
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                if entry.credentials.email.is_none() {
+                    entry.credentials.email = Some(email.to_string());
+                    tracing::info!("凭据 #{} email 已回填: {}", id, email);
+                    need_persist = true;
+                }
+            }
+        }
+
+        if need_persist {
+            if let Err(e) = self.persist_credentials() {
+                tracing::warn!("凭据信息更新后持久化失败（不影响本次请求）: {}", e);
             }
         }
 

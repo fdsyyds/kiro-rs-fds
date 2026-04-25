@@ -27,6 +27,7 @@ interface CredentialInput {
   apiRegion?: string
   priority?: number
   machineId?: string
+  email?: string
 }
 
 interface VerificationResult {
@@ -182,6 +183,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
             clientSecret,
             priority: cred.priority || 0,
             machineId: cred.machineId?.trim() || undefined,
+            email: cred.email?.trim() || undefined,
           })
 
           addedCredId = addedCred.credentialId

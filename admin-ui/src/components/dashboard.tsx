@@ -31,6 +31,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [batchImportDialogOpen, setBatchImportDialogOpen] = useState(false)
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'disabled' | 'failed'>('all')
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
@@ -41,7 +42,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [queryInfoProgress, setQueryInfoProgress] = useState({ current: 0, total: 0 })
   const cancelVerifyRef = useRef(false)
   const [currentPage, setCurrentPage] = useState(1)
-  const itemsPerPage = 12
+  const itemsPerPage = 30
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return document.documentElement.classList.contains('dark')
@@ -62,21 +63,28 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [outputMultiplierInput, setOutputMultiplierInput] = useState('')
   const [isEditingMultiplier, setIsEditingMultiplier] = useState(false)
 
-  // 计算分页
-  const totalPages = Math.ceil((data?.credentials.length || 0) / itemsPerPage)
+  // 筛选 + 分页
+  const filteredCredentials = (data?.credentials || []).filter(c => {
+    if (statusFilter === 'active') return !c.disabled && c.failureCount === 0
+    if (statusFilter === 'disabled') return c.disabled
+    if (statusFilter === 'failed') return c.failureCount > 0 && !c.disabled
+    return true
+  })
+  const totalPages = Math.ceil(filteredCredentials.length / itemsPerPage)
   const startIndex = (currentPage - 1) * itemsPerPage
   const endIndex = startIndex + itemsPerPage
-  const currentCredentials = data?.credentials.slice(startIndex, endIndex) || []
+  const currentCredentials = filteredCredentials.slice(startIndex, endIndex)
   const disabledCredentialCount = data?.credentials.filter(credential => credential.disabled).length || 0
+  const failedCredentialCount = data?.credentials.filter(c => c.failureCount > 0 && !c.disabled).length || 0
   const selectedDisabledCount = Array.from(selectedIds).filter(id => {
     const credential = data?.credentials.find(c => c.id === id)
     return Boolean(credential?.disabled)
   }).length
 
-  // 当凭据列表变化时重置到第一页
+  // 筛选或凭据列表变化时重置到第一页
   useEffect(() => {
     setCurrentPage(1)
-  }, [data?.credentials.length])
+  }, [data?.credentials.length, statusFilter])
 
   // 只保留当前仍存在的凭据缓存，避免删除后残留旧数据
   useEffect(() => {
@@ -629,7 +637,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.3.7</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.3.8</span>
             <Button
               variant="outline"
               size="sm"
@@ -713,9 +721,42 @@ export function Dashboard({ onLogout }: DashboardProps) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <h2 className="text-xl font-semibold">凭据管理</h2>
+              {/* 状态筛选 */}
+              <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+                {([
+                  { key: 'all' as const, label: '全部', count: data?.credentials.length || 0 },
+                  { key: 'active' as const, label: '正常', count: (data?.credentials.length || 0) - disabledCredentialCount - failedCredentialCount },
+                  { key: 'disabled' as const, label: '禁用', count: disabledCredentialCount },
+                  { key: 'failed' as const, label: '异常', count: failedCredentialCount },
+                ]).map(({ key, label, count }) => (
+                  <button
+                    key={key}
+                    onClick={() => setStatusFilter(key)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      statusFilter === key
+                        ? 'bg-background shadow-sm text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {label}
+                    {count > 0 && <span className="ml-1 text-[10px] opacity-60">{count}</span>}
+                  </button>
+                ))}
+              </div>
               {selectedIds.size > 0 && (
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary">已选择 {selectedIds.size} 个</Badge>
+                  <Button
+                    onClick={() => {
+                      const allIds = new Set(data?.credentials.map(c => c.id) || [])
+                      setSelectedIds(allIds)
+                    }}
+                    size="sm"
+                    variant="ghost"
+                    disabled={selectedIds.size === (data?.credentials.length || 0)}
+                  >
+                    全选
+                  </Button>
                   <Button onClick={deselectAll} size="sm" variant="ghost">
                     取消选择
                   </Button>
@@ -805,7 +846,18 @@ export function Dashboard({ onLogout }: DashboardProps) {
             </Card>
           ) : (
             <>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {/* 列表表头 */}
+              <div className="hidden md:flex items-center gap-3 px-3 py-1.5 text-[11px] text-muted-foreground uppercase tracking-wider border-b">
+                <div className="w-4" />
+                <div className="w-2" />
+                <div className="flex-1">邮箱</div>
+                <div className="w-[100px] text-right">已用</div>
+                <div className="hidden lg:block w-12 text-right">RPM</div>
+                <div className="hidden lg:block w-10 text-right">调用</div>
+                <div className="hidden xl:block w-14 text-right">成功</div>
+                <div className="w-7" />
+              </div>
+              <div className="space-y-1">
                 {currentCredentials.map((credential) => (
                   <CredentialCard
                     key={credential.id}
@@ -833,7 +885,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   </Button>
                   <span className="text-sm text-muted-foreground">
                     <span className="sm:hidden">{currentPage}/{totalPages}</span>
-                    <span className="hidden sm:inline">第 {currentPage} / {totalPages} 页（共 {data?.credentials.length} 个凭据）</span>
+                    <span className="hidden sm:inline">第 {currentPage} / {totalPages} 页（共 {filteredCredentials.length} 个凭据）</span>
                   </span>
                   <Button
                     variant="outline"

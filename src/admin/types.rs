@@ -57,6 +57,9 @@ pub struct CredentialStatusItem {
     /// 订阅等级
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription_title: Option<String>,
+    /// RPM 限制（不填则不限制）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<u32>,
 }
 
 /// 启用/禁用凭据请求
@@ -173,6 +176,9 @@ pub struct UpdateCredentialRequest {
 
     /// 凭据级代理认证密码（可选）
     pub proxy_password: Option<String>,
+
+    /// RPM 限制（可选，0 表示清除限制）
+    pub rpm_limit: Option<u32>,
 }
 
 /// 导出凭据请求

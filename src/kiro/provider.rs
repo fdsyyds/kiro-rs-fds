@@ -313,7 +313,7 @@ impl KiroProvider {
         for attempt in 0..max_retries {
             // 获取调用上下文
             // MCP 调用（WebSearch 等工具）不涉及模型选择，无需按模型过滤凭据
-            let ctx = match self.token_manager.acquire_context(None).await {
+            let ctx = match self.token_manager.acquire_context(None, self.rpm_tracker.as_ref().map(Arc::as_ref)).await {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);
@@ -472,7 +472,7 @@ impl KiroProvider {
         for attempt in 0..max_retries {
             // 获取调用上下文（绑定 index、credentials、token）
             let t_ctx_start = std::time::Instant::now();
-            let ctx = match self.token_manager.acquire_context(model.as_deref()).await {
+            let ctx = match self.token_manager.acquire_context(model.as_deref(), self.rpm_tracker.as_ref().map(Arc::as_ref)).await {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);

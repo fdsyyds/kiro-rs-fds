@@ -24,6 +24,7 @@ export interface CredentialStatusItem {
   proxyUrl?: string
   clientId?: string
   subscriptionTitle?: string
+  rpmLimit?: number
 }
 export interface BalanceResponse {
   id: number
@@ -86,9 +87,8 @@ export interface UpdateCredentialRequest {
   proxyUrl?: string
   proxyUsername?: string
   proxyPassword?: string
+  rpmLimit?: number
 }
-
-// 添加凭据响应
 export interface AddCredentialResponse {
   success: boolean
   message: string

@@ -28,6 +28,7 @@ export function EditCredentialDialog({ open, onOpenChange, credential }: EditCre
   const [proxyUrl, setProxyUrl] = useState('')
   const [proxyUsername, setProxyUsername] = useState('')
   const [proxyPassword, setProxyPassword] = useState('')
+  const [rpmLimit, setRpmLimit] = useState('')
 
   const { mutate, isPending } = useUpdateCredential()
 
@@ -42,6 +43,7 @@ export function EditCredentialDialog({ open, onOpenChange, credential }: EditCre
       setProxyUrl(credential.proxyUrl || '')
       setProxyUsername('')
       setProxyPassword('')
+      setRpmLimit(credential.rpmLimit ? String(credential.rpmLimit) : '')
     }
   }, [open, credential])
 
@@ -49,7 +51,7 @@ export function EditCredentialDialog({ open, onOpenChange, credential }: EditCre
     e.preventDefault()
 
     // 构建只包含有变更的字段
-    const data: Record<string, string> = {}
+    const data: Record<string, string | number> = {}
     if (authRegion !== '') data.authRegion = authRegion
     if (apiRegion !== '') data.apiRegion = apiRegion
     if (clientId !== '') data.clientId = clientId
@@ -58,6 +60,10 @@ export function EditCredentialDialog({ open, onOpenChange, credential }: EditCre
     if (proxyUrl !== (credential.proxyUrl || '')) data.proxyUrl = proxyUrl
     if (proxyUsername !== '') data.proxyUsername = proxyUsername
     if (proxyPassword !== '') data.proxyPassword = proxyPassword
+    const currentRpmLimit = credential.rpmLimit ? String(credential.rpmLimit) : ''
+    if (rpmLimit !== currentRpmLimit) {
+      data.rpmLimit = rpmLimit === '' ? 0 : parseInt(rpmLimit, 10)
+    }
 
     if (Object.keys(data).length === 0) {
       toast.info('没有需要更新的字段')
@@ -175,6 +181,22 @@ export function EditCredentialDialog({ open, onOpenChange, credential }: EditCre
                   disabled={isPending}
                 />
               </div>
+            </div>
+
+            {/* RPM 限制 */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">RPM 限制</label>
+              <Input
+                type="number"
+                placeholder="不填则不限制"
+                value={rpmLimit}
+                onChange={(e) => setRpmLimit(e.target.value)}
+                disabled={isPending}
+                min="0"
+              />
+              <p className="text-xs text-muted-foreground">
+                每分钟最大请求数，填 0 或留空表示不限制
+              </p>
             </div>
           </div>
 

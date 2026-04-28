@@ -213,11 +213,11 @@ export function CredentialCard({
         </div>
 
         {/* RPM */}
-        <div className="hidden lg:block shrink-0 w-12 text-right">
+        <div className="hidden lg:block shrink-0 w-16 text-right">
           <span className={`text-xs tabular-nums ${rpm > 0 ? 'text-blue-600 font-medium' : 'text-muted-foreground'}`}>
             {rpm > 0 ? rpm : '—'}
+            {credential.rpmLimit && <span className="text-muted-foreground font-normal">/{credential.rpmLimit}</span>}
           </span>
-          {rpm > 0 && <span className="text-[10px] text-muted-foreground ml-0.5">rpm</span>}
         </div>
 
         {/* 最后调用 */}

@@ -92,6 +92,7 @@ impl AdminService {
                 proxy_url: entry.proxy_url,
                 client_id: entry.client_id,
                 subscription_title: entry.subscription_title,
+                rpm_limit: entry.rpm_limit,
             })
             .collect();
 
@@ -295,6 +296,7 @@ impl AdminService {
             proxy_url: req.proxy_url,
             proxy_username: req.proxy_username,
             proxy_password: req.proxy_password,
+            rpm_limit: None,
             disabled: false, // 新添加的凭据默认启用
         };
 

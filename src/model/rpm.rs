@@ -110,6 +110,17 @@ impl RpmTracker {
             .record(now);
     }
 
+    /// 查询单个凭据的当前 RPM
+    pub fn get_credential_rpm(&self, credential_id: u64) -> u64 {
+        let now = Instant::now();
+        let mut inner = self.inner.lock();
+        inner
+            .by_credential
+            .get_mut(&credential_id)
+            .map(|q| q.count(now))
+            .unwrap_or(0)
+    }
+
     /// 获取当前 RPM 快照
     pub fn snapshot(&self) -> RpmSnapshot {
         let now = Instant::now();

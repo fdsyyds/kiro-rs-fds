@@ -24,6 +24,7 @@ use crate::kiro::model::token_refresh::{
 };
 use crate::kiro::model::usage_limits::UsageLimitsResponse;
 use crate::model::config::Config;
+use crate::model::rpm::RpmTracker;
 
 /// Token 管理器
 ///
@@ -502,6 +503,9 @@ pub struct CredentialEntrySnapshot {
     /// 订阅等级
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription_title: Option<String>,
+    /// RPM 限制
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<u32>,
 }
 
 /// 凭据管理器状态快照
@@ -768,7 +772,7 @@ impl MultiTokenManager {
     ///
     /// # 参数
     /// - `model`: 可选的模型名称，用于过滤支持该模型的凭据（如 opus 模型需要付费订阅）
-    pub async fn acquire_context(&self, model: Option<&str>) -> anyhow::Result<CallContext> {
+    pub async fn acquire_context(&self, model: Option<&str>, rpm_tracker: Option<&RpmTracker>) -> anyhow::Result<CallContext> {
         let total = self.total_count();
         let mut tried_count = 0;
 
@@ -790,7 +794,17 @@ impl MultiTokenManager {
                     let current_id = *self.current_id.lock();
                     entries
                         .iter()
-                        .find(|e| e.id == current_id && !e.disabled)
+                        .find(|e| {
+                            if e.id != current_id || e.disabled {
+                                return false;
+                            }
+                            if let (Some(limit), Some(tracker)) = (e.credentials.rpm_limit, rpm_tracker) {
+                                if tracker.get_credential_rpm(e.id) >= limit as u64 {
+                                    return false;
+                                }
+                            }
+                            true
+                        })
                         .map(|e| (e.id, e.credentials.clone()))
                 };
 
@@ -810,6 +824,11 @@ impl MultiTokenManager {
                             }
                             if is_opus && !e.credentials.supports_opus() {
                                 return false;
+                            }
+                            if let (Some(limit), Some(tracker)) = (e.credentials.rpm_limit, rpm_tracker) {
+                                if tracker.get_credential_rpm(e.id) >= limit as u64 {
+                                    return false;
+                                }
                             }
                             true
                         })
@@ -1347,7 +1366,7 @@ impl MultiTokenManager {
 
     /// 获取使用额度信息
     pub async fn get_usage_limits(&self) -> anyhow::Result<UsageLimitsResponse> {
-        let ctx = self.acquire_context(None).await?;
+        let ctx = self.acquire_context(None, None).await?;
         let effective_proxy = ctx.credentials.effective_proxy(self.proxy.as_ref());
         get_usage_limits(
             &ctx.credentials,
@@ -1393,6 +1412,7 @@ impl MultiTokenManager {
                     proxy_url: e.credentials.proxy_url.clone(),
                     client_id: e.credentials.client_id.clone(),
                     subscription_title: e.credentials.subscription_title.clone(),
+                    rpm_limit: e.credentials.rpm_limit,
                 })
                 .collect(),
             current_id,
@@ -1812,6 +1832,9 @@ impl MultiTokenManager {
         }
         if let Some(ref pp) = update.proxy_password {
             cred.proxy_password = if pp.is_empty() { None } else { Some(pp.clone()) };
+        }
+        if let Some(limit) = update.rpm_limit {
+            cred.rpm_limit = if limit == 0 { None } else { Some(limit) };
         }
     }
 
@@ -2257,7 +2280,7 @@ mod tests {
         assert_eq!(manager.available_count(), 0);
 
         // 应触发自愈：重置失败计数并重新启用，避免必须重启进程
-        let ctx = manager.acquire_context(None).await.unwrap();
+        let ctx = manager.acquire_context(None, None).await.unwrap();
         assert!(ctx.token == "t1" || ctx.token == "t2");
         assert_eq!(manager.available_count(), 2);
     }
@@ -2294,7 +2317,7 @@ mod tests {
         manager.report_quota_exhausted(2);
         assert_eq!(manager.available_count(), 0);
 
-        let err = manager.acquire_context(None).await.err().unwrap().to_string();
+        let err = manager.acquire_context(None, None).await.err().unwrap().to_string();
         assert!(
             err.contains("所有凭据均已禁用"),
             "错误应提示所有凭据禁用，实际: {}",

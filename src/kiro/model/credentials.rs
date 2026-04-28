@@ -93,6 +93,11 @@ pub struct KiroCredentials {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_password: Option<String>,
 
+    /// RPM 限制（可选，不填则不限制）
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<u32>,
+
     /// 凭据是否被禁用（默认为 false）
     #[serde(default)]
     pub disabled: bool,

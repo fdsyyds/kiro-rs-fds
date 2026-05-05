@@ -94,8 +94,7 @@ pub fn map_model(model: &str) -> Option<String> {
         if model_lower.contains("4-5") || model_lower.contains("4.5") {
             Some("claude-opus-4.5".to_string())
         } else if model_lower.contains("4-7") || model_lower.contains("4.7") {
-            // 上游暂不支持 4.7，降级到 4.6
-            Some("claude-opus-4.6".to_string())
+            Some("claude-opus-4.7".to_string())
         } else {
             Some("claude-opus-4.6".to_string())
         }

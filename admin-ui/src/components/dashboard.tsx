@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Download, Trash2, RotateCcw, CheckCircle2, Key, BarChart3, Zap } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Download, Trash2, RotateCcw, CheckCircle2, Key, BarChart3, Zap, Search, X } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { CredentialCard } from '@/components/credential-card'
 import { BalanceDialog } from '@/components/balance-dialog'
 import { AddCredentialDialog } from '@/components/add-credential-dialog'
@@ -33,6 +34,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [credentialSearch, setCredentialSearch] = useState('')
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
@@ -65,15 +67,38 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [isEditingMultiplier, setIsEditingMultiplier] = useState(false)
 
   // 筛选 + 分页
+  const searchQuery = credentialSearch.trim().toLowerCase()
   const filteredCredentials = (data?.credentials || []).filter(c => {
-    if (statusFilter === 'active') return !c.disabled && c.failureCount === 0
-    if (statusFilter === 'disabled') return c.disabled
-    if (statusFilter === 'failed') return c.failureCount > 0 && !c.disabled
+    let matchesStatus = true
+    if (statusFilter === 'active') matchesStatus = !c.disabled && c.failureCount === 0
+    if (statusFilter === 'disabled') matchesStatus = c.disabled
+    if (statusFilter === 'failed') matchesStatus = c.failureCount > 0 && !c.disabled
     if (statusFilter.startsWith('tier:')) {
       const tier = statusFilter.slice(5).toLowerCase()
-      return c.subscriptionTitle?.toLowerCase().includes(tier)
+      matchesStatus = c.subscriptionTitle?.toLowerCase().includes(tier) || false
     }
-    return true
+    if (!matchesStatus) return false
+    if (!searchQuery) return true
+
+    const searchableText = [
+      c.id,
+      `#${c.id}`,
+      c.email,
+      c.subscriptionTitle,
+      c.authMethod,
+      c.refreshTokenHash,
+      c.proxyUrl,
+      c.clientId,
+      c.priority,
+      c.rpmLimit,
+      c.successCount,
+      c.lastUsedAt,
+    ]
+      .filter(value => value !== null && value !== undefined)
+      .join(' ')
+      .toLowerCase()
+
+    return searchableText.includes(searchQuery)
   })
   const totalPages = Math.ceil(filteredCredentials.length / itemsPerPage)
   const startIndex = (currentPage - 1) * itemsPerPage
@@ -96,7 +121,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   // 筛选或凭据列表变化时重置到第一页
   useEffect(() => {
     setCurrentPage(1)
-  }, [data?.credentials.length, statusFilter])
+  }, [data?.credentials.length, statusFilter, searchQuery])
 
   // 只保留当前仍存在的凭据缓存，避免删除后残留旧数据
   useEffect(() => {
@@ -658,7 +683,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.4.2</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.4.3</span>
             <Button
               variant="outline"
               size="sm"
@@ -836,10 +861,42 @@ export function Dashboard({ onLogout }: DashboardProps) {
               </Button>
             </div>
           </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative w-full sm:max-w-md">
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={credentialSearch}
+                onChange={(event) => setCredentialSearch(event.target.value)}
+                placeholder="搜索 ID、邮箱、订阅、认证方式、代理"
+                className="h-9 pl-8 pr-8"
+              />
+              {credentialSearch && (
+                <button
+                  type="button"
+                  onClick={() => setCredentialSearch('')}
+                  className="absolute right-2 top-1/2 rounded-sm p-1 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="清空搜索"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {searchQuery && (
+              <div className="text-xs text-muted-foreground">
+                匹配 {filteredCredentials.length} / {data?.credentials.length || 0} 个凭据
+              </div>
+            )}
+          </div>
           {data?.credentials.length === 0 ? (
             <Card>
               <CardContent className="py-8 text-center text-muted-foreground">
                 暂无凭据
+              </CardContent>
+            </Card>
+          ) : filteredCredentials.length === 0 ? (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                没有匹配的凭据
               </CardContent>
             </Card>
           ) : (

@@ -60,8 +60,8 @@ impl KiroProvider {
     pub fn with_proxy(token_manager: Arc<MultiTokenManager>, proxy: Option<ProxyConfig>) -> Self {
         let tls_backend = token_manager.config().tls_backend;
         // 预热：构建全局代理对应的 Client
-        let initial_client = build_client(proxy.as_ref(), 180, tls_backend)
-            .expect("创建 HTTP 客户端失败");
+        let initial_client =
+            build_client(proxy.as_ref(), 180, tls_backend).expect("创建 HTTP 客户端失败");
         let mut cache = HashMap::new();
         cache.insert(proxy.clone(), initial_client);
 
@@ -116,7 +116,10 @@ impl KiroProvider {
 
     /// 获取 API 基础域名（使用 config 级 api_region）
     pub fn base_domain(&self) -> String {
-        format!("q.{}.amazonaws.com", self.token_manager.config().effective_api_region())
+        format!(
+            "q.{}.amazonaws.com",
+            self.token_manager.config().effective_api_region()
+        )
     }
 
     /// 获取凭据级 API 基础 URL
@@ -197,7 +200,10 @@ impl KiroProvider {
             reqwest::header::USER_AGENT,
             HeaderValue::from_str(&user_agent).unwrap(),
         );
-        headers.insert(HOST, HeaderValue::from_str(&self.base_domain_for(&ctx.credentials)).unwrap());
+        headers.insert(
+            HOST,
+            HeaderValue::from_str(&self.base_domain_for(&ctx.credentials)).unwrap(),
+        );
         headers.insert(
             "amz-sdk-invocation-id",
             HeaderValue::from_str(&Uuid::new_v4().to_string()).unwrap(),
@@ -240,7 +246,10 @@ impl KiroProvider {
             HeaderValue::from_str(&x_amz_user_agent).unwrap(),
         );
         headers.insert("user-agent", HeaderValue::from_str(&user_agent).unwrap());
-        headers.insert("host", HeaderValue::from_str(&self.base_domain_for(&ctx.credentials)).unwrap());
+        headers.insert(
+            "host",
+            HeaderValue::from_str(&self.base_domain_for(&ctx.credentials)).unwrap(),
+        );
         headers.insert(
             "amz-sdk-invocation-id",
             HeaderValue::from_str(&Uuid::new_v4().to_string()).unwrap(),
@@ -308,16 +317,23 @@ impl KiroProvider {
         let _permit = self.concurrency_limit.acquire().await?;
         let total_credentials = self.token_manager.total_count();
         let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
+        let max_rate_limit_retries = total_credentials;
         let mut last_error: Option<anyhow::Error> = None;
+        let mut retry_attempt = 0usize;
+        let mut rate_limit_attempt = 0usize;
 
-        for attempt in 0..max_retries {
+        while retry_attempt < max_retries && rate_limit_attempt < max_rate_limit_retries {
             // 获取调用上下文
             // MCP 调用（WebSearch 等工具）不涉及模型选择，无需按模型过滤凭据
-            let ctx = match self.token_manager.acquire_context(None, self.rpm_tracker.as_ref().map(Arc::as_ref)).await {
+            let ctx = match self
+                .token_manager
+                .acquire_context(None, self.rpm_tracker.as_ref().map(Arc::as_ref))
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);
-                    continue;
+                    break;
                 }
             };
 
@@ -326,6 +342,7 @@ impl KiroProvider {
                 Ok(h) => h,
                 Err(e) => {
                     last_error = Some(e);
+                    retry_attempt += 1;
                     continue;
                 }
             };
@@ -343,13 +360,14 @@ impl KiroProvider {
                 Err(e) => {
                     tracing::warn!(
                         "MCP 请求发送失败（尝试 {}/{}）: {}",
-                        attempt + 1,
+                        retry_attempt + 1,
                         max_retries,
                         e
                     );
                     last_error = Some(e.into());
-                    if attempt + 1 < max_retries {
-                        sleep(Self::retry_delay(attempt)).await;
+                    retry_attempt += 1;
+                    if retry_attempt < max_retries {
+                        sleep(Self::retry_delay(retry_attempt - 1)).await;
                     }
                     continue;
                 }
@@ -376,6 +394,7 @@ impl KiroProvider {
                     anyhow::bail!("MCP 请求失败（所有凭据已用尽）: {} {}", status, body);
                 }
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
+                retry_attempt += 1;
                 continue;
             }
 
@@ -391,6 +410,7 @@ impl KiroProvider {
                     anyhow::bail!("MCP 请求失败（所有凭据已用尽）: {} {}", status, body);
                 }
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
+                retry_attempt += 1;
                 continue;
             }
 
@@ -399,14 +419,15 @@ impl KiroProvider {
             if status.as_u16() == 429 {
                 tracing::warn!(
                     "MCP 请求失败（上游限流，凭据进入冷却，尝试 {}/{}）: {} {}",
-                    attempt + 1,
-                    max_retries,
+                    rate_limit_attempt + 1,
+                    max_rate_limit_retries,
                     status,
                     body
                 );
                 self.token_manager.report_rate_limited(ctx.id);
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
                 // 429 表示当前凭据已被限流，立即切换到下一个可用凭据以降低首字延迟。
+                rate_limit_attempt += 1;
                 continue;
             }
 
@@ -414,14 +435,15 @@ impl KiroProvider {
             if status.as_u16() == 408 || status.is_server_error() {
                 tracing::warn!(
                     "MCP 请求失败（上游瞬态错误，尝试 {}/{}）: {} {}",
-                    attempt + 1,
+                    retry_attempt + 1,
                     max_retries,
                     status,
                     body
                 );
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
-                if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
+                retry_attempt += 1;
+                if retry_attempt < max_retries {
+                    sleep(Self::retry_delay(retry_attempt - 1)).await;
                 }
                 continue;
             }
@@ -433,8 +455,9 @@ impl KiroProvider {
 
             // 兜底
             last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
-            if attempt + 1 < max_retries {
-                sleep(Self::retry_delay(attempt)).await;
+            retry_attempt += 1;
+            if retry_attempt < max_retries {
+                sleep(Self::retry_delay(retry_attempt - 1)).await;
             }
         }
 
@@ -462,20 +485,27 @@ impl KiroProvider {
         }
         let total_credentials = self.token_manager.total_count();
         let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
+        let max_rate_limit_retries = total_credentials;
         let mut last_error: Option<anyhow::Error> = None;
         let api_type = if is_stream { "流式" } else { "非流式" };
+        let mut retry_attempt = 0usize;
+        let mut rate_limit_attempt = 0usize;
 
         // 尝试从请求体中提取模型信息
         let model = Self::extract_model_from_request(request_body);
 
-        for attempt in 0..max_retries {
+        while retry_attempt < max_retries && rate_limit_attempt < max_rate_limit_retries {
             // 获取调用上下文（绑定 index、credentials、token）
             let t_ctx_start = std::time::Instant::now();
-            let ctx = match self.token_manager.acquire_context(model.as_deref(), self.rpm_tracker.as_ref().map(Arc::as_ref)).await {
+            let ctx = match self
+                .token_manager
+                .acquire_context(model.as_deref(), self.rpm_tracker.as_ref().map(Arc::as_ref))
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);
-                    continue;
+                    break;
                 }
             };
             let ctx_ms = t_ctx_start.elapsed().as_millis();
@@ -488,6 +518,7 @@ impl KiroProvider {
                 Ok(h) => h,
                 Err(e) => {
                     last_error = Some(e);
+                    retry_attempt += 1;
                     continue;
                 }
             };
@@ -505,15 +536,16 @@ impl KiroProvider {
                 Err(e) => {
                     tracing::warn!(
                         "API 请求发送失败（尝试 {}/{}）: {}",
-                        attempt + 1,
+                        retry_attempt + 1,
                         max_retries,
                         e
                     );
                     // 网络错误通常是上游/链路瞬态问题，不应导致"禁用凭据"或"切换凭据"
                     // （否则一段时间网络抖动会把所有凭据都误禁用，需要重启才能恢复）
                     last_error = Some(e.into());
-                    if attempt + 1 < max_retries {
-                        sleep(Self::retry_delay(attempt)).await;
+                    retry_attempt += 1;
+                    if retry_attempt < max_retries {
+                        sleep(Self::retry_delay(retry_attempt - 1)).await;
                     }
                     continue;
                 }
@@ -537,7 +569,7 @@ impl KiroProvider {
             if status.as_u16() == 402 && Self::is_monthly_request_limit(&body) {
                 tracing::warn!(
                     "API 请求失败（额度已用尽，禁用凭据并切换，尝试 {}/{}）: {} {}",
-                    attempt + 1,
+                    retry_attempt + 1,
                     max_retries,
                     status,
                     body
@@ -559,6 +591,7 @@ impl KiroProvider {
                     status,
                     body
                 ));
+                retry_attempt += 1;
                 continue;
             }
 
@@ -571,7 +604,7 @@ impl KiroProvider {
             if matches!(status.as_u16(), 401 | 403) {
                 tracing::warn!(
                     "API 请求失败（可能为凭据错误，尝试 {}/{}）: {} {}",
-                    attempt + 1,
+                    retry_attempt + 1,
                     max_retries,
                     status,
                     body
@@ -593,6 +626,7 @@ impl KiroProvider {
                     status,
                     body
                 ));
+                retry_attempt += 1;
                 continue;
             }
 
@@ -600,8 +634,8 @@ impl KiroProvider {
             if status.as_u16() == 429 {
                 tracing::warn!(
                     "API 请求失败（上游限流，凭据进入冷却，尝试 {}/{}）: {} {}",
-                    attempt + 1,
-                    max_retries,
+                    rate_limit_attempt + 1,
+                    max_rate_limit_retries,
                     status,
                     body
                 );
@@ -613,6 +647,7 @@ impl KiroProvider {
                     body
                 ));
                 // 429 表示当前凭据已被限流，立即切换到下一个可用凭据以降低首字延迟。
+                rate_limit_attempt += 1;
                 continue;
             }
 
@@ -621,7 +656,7 @@ impl KiroProvider {
             if status.as_u16() == 408 || status.is_server_error() {
                 tracing::warn!(
                     "API 请求失败（上游瞬态错误，尝试 {}/{}）: {} {}",
-                    attempt + 1,
+                    retry_attempt + 1,
                     max_retries,
                     status,
                     body
@@ -632,8 +667,9 @@ impl KiroProvider {
                     status,
                     body
                 ));
-                if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
+                retry_attempt += 1;
+                if retry_attempt < max_retries {
+                    sleep(Self::retry_delay(retry_attempt - 1)).await;
                 }
                 continue;
             }
@@ -646,7 +682,7 @@ impl KiroProvider {
             // 兜底：当作可重试的瞬态错误处理（不切换凭据）
             tracing::warn!(
                 "API 请求失败（未知错误，尝试 {}/{}）: {} {}",
-                attempt + 1,
+                retry_attempt + 1,
                 max_retries,
                 status,
                 body
@@ -657,8 +693,9 @@ impl KiroProvider {
                 status,
                 body
             ));
-            if attempt + 1 < max_retries {
-                sleep(Self::retry_delay(attempt)).await;
+            retry_attempt += 1;
+            if retry_attempt < max_retries {
+                sleep(Self::retry_delay(retry_attempt - 1)).await;
             }
         }
 

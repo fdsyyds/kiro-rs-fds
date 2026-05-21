@@ -477,9 +477,17 @@ impl KiroProvider {
         request_body: &str,
         is_stream: bool,
     ) -> anyhow::Result<reqwest::Response> {
+        let provider_start = std::time::Instant::now();
+        let api_type = if is_stream { "流式" } else { "非流式" };
         let t_sem_start = std::time::Instant::now();
         let _permit = self.concurrency_limit.acquire().await?;
         let sem_wait_ms = t_sem_start.elapsed().as_millis();
+        tracing::info!(
+            api_type = api_type,
+            sem_wait_ms = sem_wait_ms,
+            elapsed_ms = provider_start.elapsed().as_millis(),
+            "provider_timing: concurrency_permit_acquired"
+        );
         if sem_wait_ms > 100 {
             tracing::warn!(sem_wait_ms = sem_wait_ms, "信号量等待耗时过长");
         }
@@ -487,7 +495,6 @@ impl KiroProvider {
         let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
         let max_rate_limit_retries = total_credentials;
         let mut last_error: Option<anyhow::Error> = None;
-        let api_type = if is_stream { "流式" } else { "非流式" };
         let mut retry_attempt = 0usize;
         let mut rate_limit_attempt = 0usize;
 
@@ -509,6 +516,13 @@ impl KiroProvider {
                 }
             };
             let ctx_ms = t_ctx_start.elapsed().as_millis();
+            tracing::info!(
+                api_type = api_type,
+                credential_id = ctx.id,
+                acquire_context_ms = ctx_ms,
+                elapsed_ms = provider_start.elapsed().as_millis(),
+                "provider_timing: acquire_context"
+            );
             if ctx_ms > 500 {
                 tracing::warn!(acquire_context_ms = ctx_ms, "acquire_context 耗时过长");
             }
@@ -524,6 +538,7 @@ impl KiroProvider {
             };
 
             // 发送请求
+            let t_send_start = std::time::Instant::now();
             let response = match self
                 .client_for(&ctx.credentials)?
                 .post(&url)
@@ -552,6 +567,14 @@ impl KiroProvider {
             };
 
             let status = response.status();
+            tracing::info!(
+                api_type = api_type,
+                credential_id = ctx.id,
+                status = %status,
+                upstream_headers_ms = t_send_start.elapsed().as_millis(),
+                elapsed_ms = provider_start.elapsed().as_millis(),
+                "provider_timing: upstream_response_headers"
+            );
 
             // 成功响应
             if status.is_success() {

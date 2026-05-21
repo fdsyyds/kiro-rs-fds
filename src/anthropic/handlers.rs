@@ -17,7 +17,7 @@ use axum::{
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use serde_json::json;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::interval;
 use uuid::Uuid;
 
@@ -29,6 +29,23 @@ use super::types::{
     OutputConfig, Thinking,
 };
 use super::websearch;
+
+fn log_request_stage(
+    request_id: &str,
+    endpoint: &str,
+    stage: &str,
+    stage_start: Instant,
+    request_start: Instant,
+) {
+    tracing::info!(
+        request_id = %request_id,
+        endpoint = endpoint,
+        stage = stage,
+        stage_ms = stage_start.elapsed().as_millis(),
+        elapsed_ms = request_start.elapsed().as_millis(),
+        "request_timing"
+    );
+}
 
 /// GET /v1/ping
 ///
@@ -325,7 +342,11 @@ pub async fn post_messages(
     identity: Option<Extension<ApiKeyContext>>,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let request_start = Instant::now();
+    let endpoint = "/v1/messages";
     tracing::info!(
+        request_id = %request_id,
         model = %payload.model,
         max_tokens = %payload.max_tokens,
         stream = %payload.stream,
@@ -335,11 +356,20 @@ pub async fn post_messages(
 
     // 记录 RPM（全局 + per-API-Key）
     if let Some(rpm_tracker) = &state.rpm_tracker {
+        let stage_start = Instant::now();
         let api_key_id = identity.as_ref().map(|ext| ext.0.id);
         rpm_tracker.record_request(api_key_id);
+        log_request_stage(
+            &request_id,
+            endpoint,
+            "record_rpm",
+            stage_start,
+            request_start,
+        );
     }
 
     // 检查 KiroProvider 是否可用
+    let stage_start = Instant::now();
     let provider = match &state.kiro_provider {
         Some(p) => p.clone(),
         None => {
@@ -354,21 +384,60 @@ pub async fn post_messages(
                 .into_response();
         }
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "provider_lookup",
+        stage_start,
+        request_start,
+    );
 
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
+    let stage_start = Instant::now();
     override_thinking_from_model_name(&mut payload);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "override_thinking",
+        stage_start,
+        request_start,
+    );
 
     // 检查是否为 WebSearch 请求
-    if websearch::has_web_search_tool(&payload) {
+    let stage_start = Instant::now();
+    let is_websearch = websearch::has_web_search_tool(&payload);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "detect_websearch",
+        stage_start,
+        request_start,
+    );
+    if is_websearch {
         tracing::info!("检测到 WebSearch 工具，路由到 WebSearch 处理");
 
         // 估算输入 tokens
-        let input_tokens = count_input_tokens_for_request(&payload).await;
+        let stage_start = Instant::now();
+        let input_tokens = token::count_all_tokens(
+            payload.model.clone(),
+            payload.system.clone(),
+            payload.messages.clone(),
+            payload.tools.clone(),
+        )
+        .await as i32;
+        log_request_stage(
+            &request_id,
+            endpoint,
+            "count_tokens_websearch",
+            stage_start,
+            request_start,
+        );
 
         return websearch::handle_websearch_request(provider, &payload, input_tokens).await;
     }
 
     // 转换请求
+    let stage_start = Instant::now();
     let conversion_result = match convert_request(&payload) {
         Ok(result) => result,
         Err(e) => {
@@ -388,13 +457,29 @@ pub async fn post_messages(
                 .into_response();
         }
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "convert_request",
+        stage_start,
+        request_start,
+    );
 
     // 构建 Kiro 请求
+    let stage_start = Instant::now();
     let kiro_request = KiroRequest {
         conversation_state: conversion_result.conversation_state,
         profile_arn: state.profile_arn.clone(),
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "build_kiro_request",
+        stage_start,
+        request_start,
+    );
 
+    let stage_start = Instant::now();
     let request_body = match serde_json::to_string(&kiro_request) {
         Ok(body) => body,
         Err(e) => {
@@ -409,32 +494,102 @@ pub async fn post_messages(
                 .into_response();
         }
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "serialize_kiro_request",
+        stage_start,
+        request_start,
+    );
 
     tracing::debug!("Kiro request body: {}", request_body);
 
     // 估算最后一条消息的 tokens（非缓存部分）
+    let stage_start = Instant::now();
     let last_msg_tokens = token::count_last_message_tokens(&payload.messages) as i32;
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "count_last_message_tokens",
+        stage_start,
+        request_start,
+    );
 
     // 估算输入 tokens（诊断：记录耗时）
-    let input_tokens = count_input_tokens_for_request(&payload).await;
+    let t_count_start = std::time::Instant::now();
+    let input_tokens = token::count_all_tokens(
+        payload.model.clone(),
+        payload.system,
+        payload.messages,
+        payload.tools,
+    )
+    .await as i32;
+    let count_tokens_ms = t_count_start.elapsed().as_millis();
+    if count_tokens_ms > 500 {
+        tracing::warn!(
+            request_id = %request_id,
+            count_tokens_ms = count_tokens_ms,
+            input_tokens = input_tokens,
+            "count_all_tokens 耗时过长"
+        );
+    }
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "count_all_tokens",
+        t_count_start,
+        request_start,
+    );
 
     // 缓存命中 tokens = 总 input - 最后一条消息
+    let stage_start = Instant::now();
     let cache_read_tokens = (input_tokens - last_msg_tokens).max(0);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "calculate_cache_tokens",
+        stage_start,
+        request_start,
+    );
 
     // 检查是否启用了thinking
+    let stage_start = Instant::now();
     let thinking_enabled = payload
         .thinking
         .as_ref()
         .map(|t| t.is_enabled())
         .unwrap_or(false);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "detect_thinking",
+        stage_start,
+        request_start,
+    );
 
     // 提取用量追踪信息
+    let stage_start = Instant::now();
     let api_key_id = identity.map(|ext| ext.0.id);
     let usage_tracker = state.usage_tracker.clone();
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "prepare_usage_tracking",
+        stage_start,
+        request_start,
+    );
 
     // 获取 Token 倍率
+    let stage_start = Instant::now();
     let input_multiplier = provider.token_manager().get_input_multiplier();
     let output_multiplier = provider.token_manager().get_output_multiplier();
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "load_token_multipliers",
+        stage_start,
+        request_start,
+    );
 
     if payload.stream {
         // 流式响应
@@ -449,6 +604,9 @@ pub async fn post_messages(
             api_key_id,
             input_multiplier,
             output_multiplier,
+            request_id,
+            endpoint,
+            request_start,
         )
         .await
     } else {
@@ -463,6 +621,9 @@ pub async fn post_messages(
             api_key_id,
             input_multiplier,
             output_multiplier,
+            request_id,
+            endpoint,
+            request_start,
         )
         .await
     }
@@ -480,26 +641,67 @@ async fn handle_stream_request(
     api_key_id: Option<u32>,
     input_multiplier: f64,
     output_multiplier: f64,
+    request_id: String,
+    endpoint: &'static str,
+    request_start: Instant,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
+    let stage_start = Instant::now();
     let response = match provider.call_api_stream(request_body).await {
         Ok(resp) => resp,
         Err(e) => return map_provider_error(e),
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "provider_stream_response_headers",
+        stage_start,
+        request_start,
+    );
 
     // 创建流处理上下文
+    let stage_start = Instant::now();
     let mut ctx = StreamContext::new_with_thinking(model, input_tokens, thinking_enabled)
         .with_cache_read_tokens(cache_read_tokens)
         .with_usage_tracking(usage_tracker, api_key_id)
         .with_multipliers(input_multiplier, output_multiplier);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "create_stream_context",
+        stage_start,
+        request_start,
+    );
 
     // 生成初始事件
+    let stage_start = Instant::now();
     let initial_events = ctx.generate_initial_events();
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "generate_initial_sse_events",
+        stage_start,
+        request_start,
+    );
 
     // 创建 SSE 流
-    let stream = create_sse_stream(response, ctx, initial_events);
+    let stream = create_sse_stream(
+        response,
+        ctx,
+        initial_events,
+        request_id.clone(),
+        endpoint,
+        request_start,
+    );
 
     // 返回 SSE 响应
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "response_ready",
+        request_start,
+        request_start,
+    );
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
@@ -512,48 +714,6 @@ async fn handle_stream_request(
 /// Ping 事件间隔（25秒）
 const PING_INTERVAL_SECS: u64 = 25;
 
-async fn count_input_tokens_for_request(payload: &MessagesRequest) -> i32 {
-    let t_count_start = std::time::Instant::now();
-    let input_tokens = if payload.stream {
-        let tokens = token::count_all_tokens_local(
-            payload.system.clone(),
-            payload.messages.clone(),
-            payload.tools.clone(),
-        );
-        tracing::debug!(
-            input_tokens = tokens,
-            "stream request uses local token estimate for lower TTFT"
-        );
-        tokens
-    } else {
-        token::count_all_tokens(
-            payload.model.clone(),
-            payload.system.clone(),
-            payload.messages.clone(),
-            payload.tools.clone(),
-        )
-        .await
-    } as i32;
-
-    let count_tokens_ms = t_count_start.elapsed().as_millis();
-    if count_tokens_ms > 500 {
-        tracing::warn!(
-            count_tokens_ms = count_tokens_ms,
-            input_tokens = input_tokens,
-            stream = payload.stream,
-            "count_all_tokens 耗时过长"
-        );
-    }
-
-    input_tokens
-}
-
-fn use_delayed_cc_stream() -> bool {
-    std::env::var("KIRO_CC_DELAYED_STREAM")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
-}
-
 /// 创建 ping 事件的 SSE 字符串
 fn create_ping_sse() -> Bytes {
     Bytes::from("event: ping\ndata: {\"type\": \"ping\"}\n\n")
@@ -564,6 +724,9 @@ fn create_sse_stream(
     response: reqwest::Response,
     ctx: StreamContext,
     initial_events: Vec<SseEvent>,
+    request_id: String,
+    endpoint: &'static str,
+    request_start: Instant,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     // 先发送初始事件
     let initial_stream = stream::iter(
@@ -574,10 +737,35 @@ fn create_sse_stream(
 
     // 然后处理 Kiro 响应流，同时每25秒发送 ping 保活
     let body_stream = response.bytes_stream();
+    let stream_start = Instant::now();
 
     let processing_stream = stream::unfold(
-        (body_stream, ctx, EventStreamDecoder::new(), false, interval(Duration::from_secs(PING_INTERVAL_SECS))),
-        |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval)| async move {
+        (
+            body_stream,
+            ctx,
+            EventStreamDecoder::new(),
+            false,
+            interval(Duration::from_secs(PING_INTERVAL_SECS)),
+            request_id,
+            endpoint,
+            request_start,
+            stream_start,
+            false,
+            false,
+        ),
+        |(
+            mut body_stream,
+            mut ctx,
+            mut decoder,
+            finished,
+            mut ping_interval,
+            request_id,
+            endpoint,
+            request_start,
+            stream_start,
+            mut first_upstream_chunk_logged,
+            mut first_model_sse_logged,
+        )| async move {
             if finished {
                 return None;
             }
@@ -588,6 +776,17 @@ fn create_sse_stream(
                 chunk_result = body_stream.next() => {
                     match chunk_result {
                         Some(Ok(chunk)) => {
+                            if !first_upstream_chunk_logged {
+                                log_request_stage(
+                                    &request_id,
+                                    endpoint,
+                                    "stream_first_upstream_chunk",
+                                    stream_start,
+                                    request_start,
+                                );
+                                first_upstream_chunk_logged = true;
+                            }
+
                             // 解码事件
                             if let Err(e) = decoder.feed(&chunk) {
                                 tracing::warn!("缓冲区溢出: {}", e);
@@ -614,7 +813,33 @@ fn create_sse_stream(
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                            if !bytes.is_empty() && !first_model_sse_logged {
+                                log_request_stage(
+                                    &request_id,
+                                    endpoint,
+                                    "stream_first_model_sse_events",
+                                    stream_start,
+                                    request_start,
+                                );
+                                first_model_sse_logged = true;
+                            }
+
+                            Some((
+                                stream::iter(bytes),
+                                (
+                                    body_stream,
+                                    ctx,
+                                    decoder,
+                                    false,
+                                    ping_interval,
+                                    request_id,
+                                    endpoint,
+                                    request_start,
+                                    stream_start,
+                                    first_upstream_chunk_logged,
+                                    first_model_sse_logged,
+                                ),
+                            ))
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
@@ -624,7 +849,22 @@ fn create_sse_stream(
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+                            Some((
+                                stream::iter(bytes),
+                                (
+                                    body_stream,
+                                    ctx,
+                                    decoder,
+                                    true,
+                                    ping_interval,
+                                    request_id,
+                                    endpoint,
+                                    request_start,
+                                    stream_start,
+                                    first_upstream_chunk_logged,
+                                    first_model_sse_logged,
+                                ),
+                            ))
                         }
                         None => {
                             // 流结束，发送最终事件
@@ -633,7 +873,22 @@ fn create_sse_stream(
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+                            Some((
+                                stream::iter(bytes),
+                                (
+                                    body_stream,
+                                    ctx,
+                                    decoder,
+                                    true,
+                                    ping_interval,
+                                    request_id,
+                                    endpoint,
+                                    request_start,
+                                    stream_start,
+                                    first_upstream_chunk_logged,
+                                    first_model_sse_logged,
+                                ),
+                            ))
                         }
                     }
                 }
@@ -641,7 +896,22 @@ fn create_sse_stream(
                 _ = ping_interval.tick() => {
                     tracing::trace!("发送 ping 保活事件");
                     let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(create_ping_sse())];
-                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                    Some((
+                        stream::iter(bytes),
+                        (
+                            body_stream,
+                            ctx,
+                            decoder,
+                            false,
+                            ping_interval,
+                            request_id,
+                            endpoint,
+                            request_start,
+                            stream_start,
+                            first_upstream_chunk_logged,
+                            first_model_sse_logged,
+                        ),
+                    ))
                 }
             }
         },
@@ -665,14 +935,26 @@ async fn handle_non_stream_request(
     api_key_id: Option<u32>,
     input_multiplier: f64,
     output_multiplier: f64,
+    request_id: String,
+    endpoint: &'static str,
+    request_start: Instant,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
+    let stage_start = Instant::now();
     let response = match provider.call_api(request_body).await {
         Ok(resp) => resp,
         Err(e) => return map_provider_error(e),
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "provider_non_stream_response_headers",
+        stage_start,
+        request_start,
+    );
 
     // 读取响应体
+    let stage_start = Instant::now();
     let body_bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -687,8 +969,16 @@ async fn handle_non_stream_request(
                 .into_response();
         }
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "read_non_stream_body",
+        stage_start,
+        request_start,
+    );
 
     // 解析事件流
+    let stage_start = Instant::now();
     let mut decoder = EventStreamDecoder::new();
     if let Err(e) = decoder.feed(&body_bytes) {
         tracing::warn!("缓冲区溢出: {}", e);
@@ -798,6 +1088,14 @@ async fn handle_non_stream_request(
     // 估算输出 tokens
     let output_tokens = token::estimate_output_tokens(&content);
 
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "decode_non_stream_events",
+        stage_start,
+        request_start,
+    );
+
     // 使用从 contextUsageEvent 计算的 input_tokens，如果没有则使用估算值
     let final_input_tokens = context_input_tokens.unwrap_or(input_tokens);
 
@@ -836,6 +1134,13 @@ async fn handle_non_stream_request(
         }
     });
 
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "build_non_stream_response",
+        request_start,
+        request_start,
+    );
     (StatusCode::OK, Json(response_body)).into_response()
 }
 
@@ -908,14 +1213,19 @@ pub async fn count_tokens(
 /// POST /cc/v1/messages
 ///
 /// Claude Code 兼容端点，与 /v1/messages 的区别在于：
-/// - 流式响应优先快速首包，不等待 contextUsageEvent 后再发送 message_start
-/// - message_start 中的 input_tokens 使用本地估算，最终 usage 仍会尽量使用上游 contextUsageEvent 修正
+/// - 流式响应会等待 kiro 端返回 contextUsageEvent 后再发送 message_start
+/// - message_start 中的 input_tokens 是从 contextUsageEvent 计算的准确值
 pub async fn post_messages_cc(
     State(state): State<AppState>,
     identity: Option<Extension<ApiKeyContext>>,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let request_start = Instant::now();
+    let endpoint = "/cc/v1/messages";
+    let provider_lookup_start = Instant::now();
     tracing::info!(
+        request_id = %request_id,
         model = %payload.model,
         max_tokens = %payload.max_tokens,
         stream = %payload.stream,
@@ -938,21 +1248,60 @@ pub async fn post_messages_cc(
                 .into_response();
         }
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "provider_lookup",
+        provider_lookup_start,
+        request_start,
+    );
 
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
+    let stage_start = Instant::now();
     override_thinking_from_model_name(&mut payload);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "override_thinking",
+        stage_start,
+        request_start,
+    );
 
     // 检查是否为 WebSearch 请求
-    if websearch::has_web_search_tool(&payload) {
+    let stage_start = Instant::now();
+    let is_websearch = websearch::has_web_search_tool(&payload);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "detect_websearch",
+        stage_start,
+        request_start,
+    );
+    if is_websearch {
         tracing::info!("检测到 WebSearch 工具，路由到 WebSearch 处理");
 
         // 估算输入 tokens
-        let input_tokens = count_input_tokens_for_request(&payload).await;
+        let stage_start = Instant::now();
+        let input_tokens = token::count_all_tokens(
+            payload.model.clone(),
+            payload.system.clone(),
+            payload.messages.clone(),
+            payload.tools.clone(),
+        )
+        .await as i32;
+        log_request_stage(
+            &request_id,
+            endpoint,
+            "count_tokens_websearch",
+            stage_start,
+            request_start,
+        );
 
         return websearch::handle_websearch_request(provider, &payload, input_tokens).await;
     }
 
     // 转换请求
+    let stage_start = Instant::now();
     let conversion_result = match convert_request(&payload) {
         Ok(result) => result,
         Err(e) => {
@@ -972,13 +1321,29 @@ pub async fn post_messages_cc(
                 .into_response();
         }
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "convert_request",
+        stage_start,
+        request_start,
+    );
 
     // 构建 Kiro 请求
+    let stage_start = Instant::now();
     let kiro_request = KiroRequest {
         conversation_state: conversion_result.conversation_state,
         profile_arn: state.profile_arn.clone(),
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "build_kiro_request",
+        stage_start,
+        request_start,
+    );
 
+    let stage_start = Instant::now();
     let request_body = match serde_json::to_string(&kiro_request) {
         Ok(body) => body,
         Err(e) => {
@@ -993,63 +1358,120 @@ pub async fn post_messages_cc(
                 .into_response();
         }
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "serialize_kiro_request",
+        stage_start,
+        request_start,
+    );
 
     tracing::debug!("Kiro request body: {}", request_body);
 
     // 估算最后一条消息的 tokens（非缓存部分）
+    let stage_start = Instant::now();
     let last_msg_tokens = token::count_last_message_tokens(&payload.messages) as i32;
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "count_last_message_tokens",
+        stage_start,
+        request_start,
+    );
 
     // 估算输入 tokens（诊断：记录耗时）
-    let input_tokens = count_input_tokens_for_request(&payload).await;
+    let t_count_start = std::time::Instant::now();
+    let input_tokens = token::count_all_tokens(
+        payload.model.clone(),
+        payload.system,
+        payload.messages,
+        payload.tools,
+    )
+    .await as i32;
+    let count_tokens_ms = t_count_start.elapsed().as_millis();
+    if count_tokens_ms > 500 {
+        tracing::warn!(
+            request_id = %request_id,
+            count_tokens_ms = count_tokens_ms,
+            input_tokens = input_tokens,
+            "count_all_tokens 耗时过长"
+        );
+    }
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "count_all_tokens",
+        t_count_start,
+        request_start,
+    );
 
     // 缓存命中 tokens = 总 input - 最后一条消息
+    let stage_start = Instant::now();
     let cache_read_tokens = (input_tokens - last_msg_tokens).max(0);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "calculate_cache_tokens",
+        stage_start,
+        request_start,
+    );
 
     // 检查是否启用了thinking
+    let stage_start = Instant::now();
     let thinking_enabled = payload
         .thinking
         .as_ref()
         .map(|t| t.is_enabled())
         .unwrap_or(false);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "detect_thinking",
+        stage_start,
+        request_start,
+    );
 
     // 提取用量追踪信息
+    let stage_start = Instant::now();
     let api_key_id = identity.map(|ext| ext.0.id);
     let usage_tracker = state.usage_tracker.clone();
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "prepare_usage_tracking",
+        stage_start,
+        request_start,
+    );
 
     // 获取 Token 倍率
+    let stage_start = Instant::now();
     let input_multiplier = provider.token_manager().get_input_multiplier();
     let output_multiplier = provider.token_manager().get_output_multiplier();
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "load_token_multipliers",
+        stage_start,
+        request_start,
+    );
 
     if payload.stream {
-        if use_delayed_cc_stream() {
-            handle_stream_request_buffered(
-                provider.clone(),
-                &request_body,
-                &payload.model,
-                input_tokens,
-                cache_read_tokens,
-                thinking_enabled,
-                usage_tracker.clone(),
-                api_key_id,
-                input_multiplier,
-                output_multiplier,
-            )
-            .await
-        } else {
-            handle_stream_request(
-                provider,
-                &request_body,
-                &payload.model,
-                input_tokens,
-                cache_read_tokens,
-                thinking_enabled,
-                usage_tracker.clone(),
-                api_key_id,
-                input_multiplier,
-                output_multiplier,
-            )
-            .await
-        }
+        handle_stream_request_buffered(
+            provider,
+            &request_body,
+            &payload.model,
+            input_tokens,
+            cache_read_tokens,
+            thinking_enabled,
+            usage_tracker.clone(),
+            api_key_id,
+            input_multiplier,
+            output_multiplier,
+            request_id,
+            endpoint,
+            request_start,
+        )
+        .await
     } else {
         // 非流式响应（复用现有逻辑，已经使用正确的 input_tokens）
         handle_non_stream_request(
@@ -1062,6 +1484,9 @@ pub async fn post_messages_cc(
             api_key_id,
             input_multiplier,
             output_multiplier,
+            request_id,
+            endpoint,
+            request_start,
         )
         .await
     }
@@ -1083,21 +1508,48 @@ async fn handle_stream_request_buffered(
     api_key_id: Option<u32>,
     input_multiplier: f64,
     output_multiplier: f64,
+    request_id: String,
+    endpoint: &'static str,
+    request_start: Instant,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
+    let stage_start = Instant::now();
     let response = match provider.call_api_stream(request_body).await {
         Ok(resp) => resp,
         Err(e) => return map_provider_error(e),
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "provider_stream_response_headers",
+        stage_start,
+        request_start,
+    );
 
     // 创建延迟流处理上下文
+    let stage_start = Instant::now();
     let ctx = DelayedStreamContext::new(model, estimated_input_tokens, thinking_enabled)
         .with_cache_read_tokens(cache_read_tokens)
         .with_usage_tracking(usage_tracker, api_key_id)
         .with_multipliers(input_multiplier, output_multiplier);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "create_delayed_stream_context",
+        stage_start,
+        request_start,
+    );
 
     // 创建延迟 SSE 流
-    let stream = create_delayed_sse_stream(response, ctx);
+    let stream =
+        create_delayed_sse_stream(response, ctx, request_id.clone(), endpoint, request_start);
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "response_ready_delayed_stream",
+        request_start,
+        request_start,
+    );
 
     // 返回 SSE 响应
     Response::builder()
@@ -1119,8 +1571,12 @@ async fn handle_stream_request_buffered(
 fn create_delayed_sse_stream(
     response: reqwest::Response,
     ctx: DelayedStreamContext,
+    request_id: String,
+    endpoint: &'static str,
+    request_start: Instant,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     let body_stream = response.bytes_stream();
+    let stream_start = Instant::now();
 
     stream::unfold(
         (
@@ -1129,8 +1585,26 @@ fn create_delayed_sse_stream(
             EventStreamDecoder::new(),
             false,
             interval(Duration::from_secs(PING_INTERVAL_SECS)),
+            request_id,
+            endpoint,
+            request_start,
+            stream_start,
+            false,
+            false,
         ),
-        |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval)| async move {
+        |(
+            mut body_stream,
+            mut ctx,
+            mut decoder,
+            finished,
+            mut ping_interval,
+            request_id,
+            endpoint,
+            request_start,
+            stream_start,
+            mut first_upstream_chunk_logged,
+            mut first_flush_logged,
+        )| async move {
             if finished {
                 return None;
             }
@@ -1145,12 +1619,38 @@ fn create_delayed_sse_stream(
                         _ = ping_interval.tick() => {
                             tracing::trace!("发送 ping 保活事件（延迟模式 Buffering 阶段）");
                             let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(create_ping_sse())];
-                            return Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)));
+                            return Some((
+                                stream::iter(bytes),
+                                (
+                                    body_stream,
+                                    ctx,
+                                    decoder,
+                                    false,
+                                    ping_interval,
+                                    request_id,
+                                    endpoint,
+                                    request_start,
+                                    stream_start,
+                                    first_upstream_chunk_logged,
+                                    first_flush_logged,
+                                ),
+                            ));
                         }
 
                         chunk_result = body_stream.next() => {
                             match chunk_result {
                                 Some(Ok(chunk)) => {
+                                    if !first_upstream_chunk_logged {
+                                        log_request_stage(
+                                            &request_id,
+                                            endpoint,
+                                            "stream_first_upstream_chunk",
+                                            stream_start,
+                                            request_start,
+                                        );
+                                        first_upstream_chunk_logged = true;
+                                    }
+
                                     if let Err(e) = decoder.feed(&chunk) {
                                         tracing::warn!("缓冲区溢出: {}", e);
                                     }
@@ -1166,7 +1666,33 @@ fn create_delayed_sse_stream(
                                                             .into_iter()
                                                             .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                                             .collect();
-                                                        return Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)));
+                                                        if !first_flush_logged {
+                                                            log_request_stage(
+                                                                &request_id,
+                                                                endpoint,
+                                                                "delayed_stream_first_flush",
+                                                                stream_start,
+                                                                request_start,
+                                                            );
+                                                            first_flush_logged = true;
+                                                        }
+
+                                                        return Some((
+                                                            stream::iter(bytes),
+                                                            (
+                                                                body_stream,
+                                                                ctx,
+                                                                decoder,
+                                                                false,
+                                                                ping_interval,
+                                                                request_id,
+                                                                endpoint,
+                                                                request_start,
+                                                                stream_start,
+                                                                first_upstream_chunk_logged,
+                                                                first_flush_logged,
+                                                            ),
+                                                        ));
                                                     }
                                                 }
                                             }
@@ -1184,7 +1710,22 @@ fn create_delayed_sse_stream(
                                         .into_iter()
                                         .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                         .collect();
-                                    return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)));
+                                    return Some((
+                                        stream::iter(bytes),
+                                        (
+                                            body_stream,
+                                            ctx,
+                                            decoder,
+                                            true,
+                                            ping_interval,
+                                            request_id,
+                                            endpoint,
+                                            request_start,
+                                            stream_start,
+                                            first_upstream_chunk_logged,
+                                            first_flush_logged,
+                                        ),
+                                    ));
                                 }
                                 None => {
                                     // 流结束，使用估算值兜底
@@ -1193,7 +1734,22 @@ fn create_delayed_sse_stream(
                                         .into_iter()
                                         .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                         .collect();
-                                    return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)));
+                                    return Some((
+                                        stream::iter(bytes),
+                                        (
+                                            body_stream,
+                                            ctx,
+                                            decoder,
+                                            true,
+                                            ping_interval,
+                                            request_id,
+                                            endpoint,
+                                            request_start,
+                                            stream_start,
+                                            first_upstream_chunk_logged,
+                                            first_flush_logged,
+                                        ),
+                                    ));
                                 }
                             }
                         }
@@ -1206,6 +1762,17 @@ fn create_delayed_sse_stream(
                 chunk_result = body_stream.next() => {
                     match chunk_result {
                         Some(Ok(chunk)) => {
+                            if !first_upstream_chunk_logged {
+                                log_request_stage(
+                                    &request_id,
+                                    endpoint,
+                                    "stream_first_upstream_chunk",
+                                    stream_start,
+                                    request_start,
+                                );
+                                first_upstream_chunk_logged = true;
+                            }
+
                             if let Err(e) = decoder.feed(&chunk) {
                                 tracing::warn!("缓冲区溢出: {}", e);
                             }
@@ -1230,7 +1797,33 @@ fn create_delayed_sse_stream(
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                            if !bytes.is_empty() && !first_flush_logged {
+                                log_request_stage(
+                                    &request_id,
+                                    endpoint,
+                                    "delayed_stream_first_flush",
+                                    stream_start,
+                                    request_start,
+                                );
+                                first_flush_logged = true;
+                            }
+
+                            Some((
+                                stream::iter(bytes),
+                                (
+                                    body_stream,
+                                    ctx,
+                                    decoder,
+                                    false,
+                                    ping_interval,
+                                    request_id,
+                                    endpoint,
+                                    request_start,
+                                    stream_start,
+                                    first_upstream_chunk_logged,
+                                    first_flush_logged,
+                                ),
+                            ))
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
@@ -1239,7 +1832,22 @@ fn create_delayed_sse_stream(
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+                            Some((
+                                stream::iter(bytes),
+                                (
+                                    body_stream,
+                                    ctx,
+                                    decoder,
+                                    true,
+                                    ping_interval,
+                                    request_id,
+                                    endpoint,
+                                    request_start,
+                                    stream_start,
+                                    first_upstream_chunk_logged,
+                                    first_flush_logged,
+                                ),
+                            ))
                         }
                         None => {
                             // 流结束，发送最终事件
@@ -1248,7 +1856,22 @@ fn create_delayed_sse_stream(
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+                            Some((
+                                stream::iter(bytes),
+                                (
+                                    body_stream,
+                                    ctx,
+                                    decoder,
+                                    true,
+                                    ping_interval,
+                                    request_id,
+                                    endpoint,
+                                    request_start,
+                                    stream_start,
+                                    first_upstream_chunk_logged,
+                                    first_flush_logged,
+                                ),
+                            ))
                         }
                     }
                 }
@@ -1256,7 +1879,22 @@ fn create_delayed_sse_stream(
                 _ = ping_interval.tick() => {
                     tracing::trace!("发送 ping 保活事件（延迟模式 Streaming 阶段）");
                     let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(create_ping_sse())];
-                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                    Some((
+                        stream::iter(bytes),
+                        (
+                            body_stream,
+                            ctx,
+                            decoder,
+                            false,
+                            ping_interval,
+                            request_id,
+                            endpoint,
+                            request_start,
+                            stream_start,
+                            first_upstream_chunk_logged,
+                            first_flush_logged,
+                        ),
+                    ))
                 }
             }
         },

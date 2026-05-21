@@ -12,10 +12,10 @@ use super::{
     },
     handlers::{
         add_credential, delete_credential, export_credentials, get_all_balance_history,
-        get_all_credentials, get_credential_balance, get_credential_balance_history,
-        get_load_balancing_mode, get_multipliers, reset_failure_count, set_credential_disabled,
-        set_credential_priority, set_load_balancing_mode, set_multipliers,
-        update_credential,
+        get_all_credentials, get_cooldown, get_credential_balance, get_credential_balance_history,
+        get_load_balancing_mode, get_multipliers, get_pool_status, reset_failure_count,
+        set_cooldown, set_credential_disabled, set_credential_priority, set_load_balancing_mode,
+        set_multipliers, update_credential,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -44,6 +44,12 @@ pub fn create_admin_router(state: AdminState) -> Router {
             "/config/multipliers",
             get(get_multipliers).put(set_multipliers),
         )
+        .route(
+            "/config/cooldown",
+            get(get_cooldown).put(set_cooldown),
+        )
+        // 池状态
+        .route("/pool-status", get(get_pool_status))
         // API Key 管理
         .route("/server-info", get(get_server_info))
         .route("/api-keys", get(list_api_keys).post(create_api_key))

@@ -262,6 +262,14 @@ pub struct SetLoadBalancingModeRequest {
     pub mode: String,
 }
 
+/// 设置 429 冷却时长请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCooldownRequest {
+    /// 冷却时长（秒），必须大于 0
+    pub cooldown_seconds: u64,
+}
+
 // ============ 通用响应 ============
 
 /// 操作成功响应

@@ -442,6 +442,8 @@ struct CredentialEntry {
     success_count: u64,
     /// 最后一次 API 调用时间（RFC3339 格式）
     last_used_at: Option<String>,
+    /// 429 冷却结束时间，None 表示未在冷却中
+    cooldown_until: Option<DateTime<Utc>>,
 }
 
 /// 禁用原因
@@ -506,6 +508,9 @@ pub struct CredentialEntrySnapshot {
     /// RPM 限制
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpm_limit: Option<u32>,
+    /// 429 冷却结束时间（RFC3339 格式），None 表示未在冷却中
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooldown_until: Option<String>,
 }
 
 /// 凭据管理器状态快照
@@ -520,6 +525,36 @@ pub struct ManagerSnapshot {
     pub total: usize,
     /// 可用凭据数量
     pub available: usize,
+}
+
+/// 池状态快照（Idle Pool / Busy Pool）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolStatusSnapshot {
+    pub idle: Vec<PoolIdleEntry>,
+    pub busy: Vec<PoolBusyEntry>,
+    pub cooldown_seconds: u64,
+}
+
+/// Idle Pool 中的凭据条目
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolIdleEntry {
+    pub id: u64,
+    pub email: Option<String>,
+    pub priority: u32,
+    pub success_count: u64,
+}
+
+/// Busy Pool（429 冷却中）的凭据条目
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolBusyEntry {
+    pub id: u64,
+    pub email: Option<String>,
+    pub priority: u32,
+    pub cooldown_until: String,
+    pub remaining_seconds: u64,
 }
 
 /// 多凭据 Token 管理器
@@ -551,6 +586,8 @@ pub struct MultiTokenManager {
     stats_dirty: AtomicBool,
     /// Round-Robin 计数器（balanced 模式下用于均匀轮转凭据）
     rr_counter: AtomicU64,
+    /// 429 冷却时长（秒），前端可配置
+    cooldown_seconds: Mutex<u64>,
 }
 
 /// 每个凭据最大 API 调用失败次数
@@ -626,6 +663,7 @@ impl MultiTokenManager {
                     },
                     success_count: 0,
                     last_used_at: None,
+                    cooldown_until: None,
                 }
             })
             .collect();
@@ -666,6 +704,7 @@ impl MultiTokenManager {
             last_stats_save_at: Mutex::new(None),
             stats_dirty: AtomicBool::new(false),
             rr_counter: AtomicU64::new(0),
+            cooldown_seconds: Mutex::new(60),
         };
 
         // 如果有新分配的 ID 或新生成的 machineId，立即持久化到配置文件
@@ -704,9 +743,20 @@ impl MultiTokenManager {
         self.entries.lock().len()
     }
 
-    /// 获取可用凭据数量
+    /// 获取可用凭据数量（排除禁用和冷却中的）
     pub fn available_count(&self) -> usize {
-        self.entries.lock().iter().filter(|e| !e.disabled).count()
+        let now = Utc::now();
+        self.entries.lock().iter().filter(|e| {
+            if e.disabled {
+                return false;
+            }
+            if let Some(until) = e.cooldown_until {
+                if now < until {
+                    return false;
+                }
+            }
+            true
+        }).count()
     }
 
     /// 根据负载均衡模式选择下一个凭据
@@ -718,6 +768,7 @@ impl MultiTokenManager {
     /// - `model`: 可选的模型名称，用于过滤支持该模型的凭据（如 opus 模型需要付费订阅）
     fn select_next_credential(&self, model: Option<&str>) -> Option<(u64, KiroCredentials)> {
         let entries = self.entries.lock();
+        let now = Utc::now();
 
         // 检查是否是 opus 模型
         let is_opus = model
@@ -730,6 +781,12 @@ impl MultiTokenManager {
             .filter(|e| {
                 if e.disabled {
                     return false;
+                }
+                // 跳过冷却中的凭据
+                if let Some(until) = e.cooldown_until {
+                    if now < until {
+                        return false;
+                    }
                 }
                 // 如果是 opus 模型，需要检查订阅等级
                 if is_opus && !e.credentials.supports_opus() {
@@ -788,6 +845,7 @@ impl MultiTokenManager {
                 let is_balanced = mode.as_str() == "balanced";
 
                 // priority 模式：优先使用 current_id 指向的凭据
+                let now = Utc::now();
                 let current_hit = if is_balanced {
                     None
                 } else {
@@ -797,6 +855,12 @@ impl MultiTokenManager {
                         .find(|e| {
                             if e.id != current_id || e.disabled {
                                 return false;
+                            }
+                            // 跳过冷却中的凭据
+                            if let Some(until) = e.cooldown_until {
+                                if now < until {
+                                    return false;
+                                }
                             }
                             if let (Some(limit), Some(tracker)) = (e.credentials.rpm_limit, rpm_tracker) {
                                 if tracker.get_credential_rpm(e.id) >= limit as u64 {
@@ -821,6 +885,12 @@ impl MultiTokenManager {
                         .filter(|e| {
                             if e.disabled {
                                 return false;
+                            }
+                            // 跳过冷却中的凭据
+                            if let Some(until) = e.cooldown_until {
+                                if now < until {
+                                    return false;
+                                }
                             }
                             if is_opus && !e.credentials.supports_opus() {
                                 return false;
@@ -858,6 +928,7 @@ impl MultiTokenManager {
                                     e.disabled = false;
                                     e.disabled_reason = None;
                                     e.failure_count = 0;
+                                    e.cooldown_until = None;
                                 }
                             }
                             // 自愈后重新选择
@@ -866,6 +937,11 @@ impl MultiTokenManager {
                                 .filter(|e| {
                                     if e.disabled {
                                         return false;
+                                    }
+                                    if let Some(until) = e.cooldown_until {
+                                        if now < until {
+                                            return false;
+                                        }
                                     }
                                     if is_opus && !e.credentials.supports_opus() {
                                         return false;
@@ -1338,6 +1414,34 @@ impl MultiTokenManager {
         result
     }
 
+    /// 报告指定凭据触发 429 限流
+    ///
+    /// 将凭据放入冷却池，冷却期间不会被 acquire_context 选中
+    /// 冷却结束后自动恢复（惰性检查，无需定时器）
+    pub fn report_rate_limited(&self, id: u64) {
+        let mut entries = self.entries.lock();
+        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+            let cooldown_secs = *self.cooldown_seconds.lock();
+            entry.cooldown_until = Some(Utc::now() + Duration::seconds(cooldown_secs as i64));
+            tracing::warn!(
+                "凭据 #{} 触发 429 限流，进入冷却 {}s",
+                id,
+                cooldown_secs
+            );
+        }
+    }
+
+    /// 获取当前 429 冷却时长（秒）
+    pub fn get_cooldown_seconds(&self) -> u64 {
+        *self.cooldown_seconds.lock()
+    }
+
+    /// 设置 429 冷却时长（秒）
+    pub fn set_cooldown_seconds(&self, seconds: u64) {
+        *self.cooldown_seconds.lock() = seconds;
+        tracing::info!("429 冷却时长已更新为 {}s", seconds);
+    }
+
     /// 切换到优先级最高的可用凭据
     ///
     /// 返回是否成功切换
@@ -1385,7 +1489,14 @@ impl MultiTokenManager {
     pub fn snapshot(&self) -> ManagerSnapshot {
         let entries = self.entries.lock();
         let current_id = *self.current_id.lock();
-        let available = entries.iter().filter(|e| !e.disabled).count();
+        let now = Utc::now();
+        let available = entries.iter().filter(|e| {
+            if e.disabled { return false; }
+            if let Some(until) = e.cooldown_until {
+                if now < until { return false; }
+            }
+            true
+        }).count();
 
         ManagerSnapshot {
             entries: entries
@@ -1413,11 +1524,56 @@ impl MultiTokenManager {
                     client_id: e.credentials.client_id.clone(),
                     subscription_title: e.credentials.subscription_title.clone(),
                     rpm_limit: e.credentials.rpm_limit,
+                    cooldown_until: e.cooldown_until.map(|t| t.to_rfc3339()),
                 })
                 .collect(),
             current_id,
             total: entries.len(),
             available,
+        }
+    }
+
+    /// 获取池状态快照（Idle Pool / Busy Pool）
+    pub fn pool_status(&self) -> PoolStatusSnapshot {
+        let entries = self.entries.lock();
+        let now = Utc::now();
+        let cooldown_seconds = *self.cooldown_seconds.lock();
+
+        let mut idle = Vec::new();
+        let mut busy = Vec::new();
+
+        for e in entries.iter() {
+            if e.disabled {
+                continue;
+            }
+            let email = e.credentials.email.clone();
+            let priority = e.credentials.priority;
+
+            if let Some(until) = e.cooldown_until {
+                if now < until {
+                    let remaining = (until - now).num_seconds().max(0) as u64;
+                    busy.push(PoolBusyEntry {
+                        id: e.id,
+                        email,
+                        priority,
+                        cooldown_until: until.to_rfc3339(),
+                        remaining_seconds: remaining,
+                    });
+                    continue;
+                }
+            }
+            idle.push(PoolIdleEntry {
+                id: e.id,
+                email,
+                priority,
+                success_count: e.success_count,
+            });
+        }
+
+        PoolStatusSnapshot {
+            idle,
+            busy,
+            cooldown_seconds,
         }
     }
 
@@ -1695,6 +1851,7 @@ impl MultiTokenManager {
                 disabled_reason: None,
                 success_count: 0,
                 last_used_at: None,
+                cooldown_until: None,
             });
         }
 

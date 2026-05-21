@@ -422,6 +422,27 @@ impl AdminService {
         })
     }
 
+    /// 获取 429 冷却时长（秒）
+    pub fn get_cooldown_seconds(&self) -> u64 {
+        self.token_manager.get_cooldown_seconds()
+    }
+
+    /// 设置 429 冷却时长（秒）
+    pub fn set_cooldown_seconds(&self, seconds: u64) -> Result<(), AdminServiceError> {
+        if seconds == 0 {
+            return Err(AdminServiceError::InvalidCredential(
+                "冷却时长必须大于 0".to_string(),
+            ));
+        }
+        self.token_manager.set_cooldown_seconds(seconds);
+        Ok(())
+    }
+
+    /// 获取池状态（Idle Pool / Busy Pool）
+    pub fn get_pool_status(&self) -> crate::kiro::token_manager::PoolStatusSnapshot {
+        self.token_manager.pool_status()
+    }
+
     // ============ 余额缓存持久化 ============
 
     fn load_balance_cache_from(cache_path: &Option<PathBuf>) -> HashMap<u64, CachedBalance> {

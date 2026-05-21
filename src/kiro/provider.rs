@@ -24,7 +24,7 @@ use tokio::sync::Semaphore;
 /// 每个凭据的最大重试次数
 const MAX_RETRIES_PER_CREDENTIAL: usize = 3;
 
-/// 总重试次数硬上限（避免无限重试）
+/// 总重试次数硬上限
 const MAX_TOTAL_RETRIES: usize = 9;
 
 /// 最大并发请求数（同时发往上游的请求上限）
@@ -262,7 +262,7 @@ impl KiroProvider {
     /// - 400 Bad Request: 直接返回错误，不计入凭据失败
     /// - 401/403: 视为凭据/权限问题，计入失败次数并允许故障转移
     /// - 402 MONTHLY_REQUEST_COUNT: 视为额度用尽，禁用凭据并切换
-    /// - 429/5xx/网络等瞬态错误: 重试但不禁用或切换凭据（避免误把所有凭据锁死）
+    /// - 429: 将凭据放入冷却池，冷却期间不再使用，切换其他凭据重试
     ///
     /// # Arguments
     /// * `request_body` - JSON 格式的请求体字符串
@@ -279,7 +279,7 @@ impl KiroProvider {
     /// - 400 Bad Request: 直接返回错误，不计入凭据失败
     /// - 401/403: 视为凭据/权限问题，计入失败次数并允许故障转移
     /// - 402 MONTHLY_REQUEST_COUNT: 视为额度用尽，禁用凭据并切换
-    /// - 429/5xx/网络等瞬态错误: 重试但不禁用或切换凭据（避免误把所有凭据锁死）
+    /// - 429: 将凭据放入冷却池，冷却期间不再使用，切换其他凭据重试
     ///
     /// # Arguments
     /// * `request_body` - JSON 格式的请求体字符串
@@ -395,19 +395,18 @@ impl KiroProvider {
             }
 
             // 429 Too Many Requests - 限流：递增 success_count 让 Least-Used 算法轮转到下一个凭据
+            // 429 Too Many Requests - 限流：将凭据放入冷却池
             if status.as_u16() == 429 {
                 tracing::warn!(
-                    "MCP 请求失败（上游限流，切换凭据重试，尝试 {}/{}）: {} {}",
+                    "MCP 请求失败（上游限流，凭据进入冷却，尝试 {}/{}）: {} {}",
                     attempt + 1,
                     max_retries,
                     status,
                     body
                 );
-                self.token_manager.report_success(ctx.id);
+                self.token_manager.report_rate_limited(ctx.id);
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
-                if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
-                }
+                // 429 表示当前凭据已被限流，立即切换到下一个可用凭据以降低首字延迟。
                 continue;
             }
 
@@ -597,26 +596,23 @@ impl KiroProvider {
                 continue;
             }
 
-            // 429 Too Many Requests - 限流：递增 success_count 让 Least-Used 算法轮转到下一个凭据
+            // 429 Too Many Requests - 限流：将凭据放入冷却池
             if status.as_u16() == 429 {
                 tracing::warn!(
-                    "API 请求失败（上游限流，切换凭据重试，尝试 {}/{}）: {} {}",
+                    "API 请求失败（上游限流，凭据进入冷却，尝试 {}/{}）: {} {}",
                     attempt + 1,
                     max_retries,
                     status,
                     body
                 );
-                // 递增 success_count，使 balanced 模式下一次 acquire_context 选择其他凭据
-                self.token_manager.report_success(ctx.id);
+                self.token_manager.report_rate_limited(ctx.id);
                 last_error = Some(anyhow::anyhow!(
                     "{} API 请求失败: {} {}",
                     api_type,
                     status,
                     body
                 ));
-                if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
-                }
+                // 429 表示当前凭据已被限流，立即切换到下一个可用凭据以降低首字延迟。
                 continue;
             }
 

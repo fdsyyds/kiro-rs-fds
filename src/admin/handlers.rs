@@ -186,3 +186,31 @@ pub async fn set_multipliers(
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }
+
+/// GET /api/admin/config/cooldown
+/// 获取 429 冷却时长
+pub async fn get_cooldown(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "cooldownSeconds": state.service.get_cooldown_seconds() }))
+}
+
+/// PUT /api/admin/config/cooldown
+/// 设置 429 冷却时长
+pub async fn set_cooldown(
+    State(state): State<AdminState>,
+    Json(payload): Json<super::types::SetCooldownRequest>,
+) -> impl IntoResponse {
+    match state.service.set_cooldown_seconds(payload.cooldown_seconds) {
+        Ok(_) => Json(SuccessResponse::new(format!(
+            "429 冷却时长已设置为 {}s",
+            payload.cooldown_seconds
+        )))
+        .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/pool-status
+/// 获取池状态（Idle Pool / Busy Pool）
+pub async fn get_pool_status(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.get_pool_status())
+}

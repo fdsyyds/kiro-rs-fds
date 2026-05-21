@@ -197,3 +197,44 @@ export async function getBalanceHistory(): Promise<BalanceHistoryMap> {
   const { data } = await api.get<BalanceHistoryMap>('/credentials/balance-history')
   return data
 }
+
+// ============ 池状态 & 冷却配置 ============
+
+export interface PoolIdleEntry {
+  id: number
+  email: string | null
+  priority: number
+  successCount: number
+}
+
+export interface PoolBusyEntry {
+  id: number
+  email: string | null
+  priority: number
+  cooldownUntil: string
+  remainingSeconds: number
+}
+
+export interface PoolStatusResponse {
+  idle: PoolIdleEntry[]
+  busy: PoolBusyEntry[]
+  cooldownSeconds: number
+}
+
+// 获取池状态
+export async function getPoolStatus(): Promise<PoolStatusResponse> {
+  const { data } = await api.get<PoolStatusResponse>('/pool-status')
+  return data
+}
+
+// 获取 429 冷却时长
+export async function getCooldown(): Promise<{ cooldownSeconds: number }> {
+  const { data } = await api.get<{ cooldownSeconds: number }>('/config/cooldown')
+  return data
+}
+
+// 设置 429 冷却时长
+export async function setCooldown(cooldownSeconds: number): Promise<SuccessResponse> {
+  const { data } = await api.put<SuccessResponse>('/config/cooldown', { cooldownSeconds })
+  return data
+}

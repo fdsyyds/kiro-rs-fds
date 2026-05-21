@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Download, Trash2, RotateCcw, CheckCircle2, Key, BarChart3 } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Download, Trash2, RotateCcw, CheckCircle2, Key, BarChart3, Zap } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
@@ -14,6 +14,7 @@ import { KamImportDialog } from '@/components/kam-import-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { ApiKeysPanel } from '@/components/api-keys-panel'
 import { BalanceHistoryPanel } from '@/components/balance-history-panel'
+import { PoolStatusPanel } from '@/components/pool-status-panel'
 import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode, useRpm, useMultipliers, useSetMultipliers } from '@/hooks/use-credentials'
 import { getCredentialBalance, exportCredentials } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
@@ -24,7 +25,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onLogout }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState<'credentials' | 'apikeys' | 'balance-history'>('credentials')
+  const [activeTab, setActiveTab] = useState<'credentials' | 'apikeys' | 'balance-history' | 'pool-status'>('credentials')
   const [selectedCredentialId, setSelectedCredentialId] = useState<number | null>(null)
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
@@ -578,6 +579,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 <BarChart3 className="h-3 w-3 sm:mr-1" />
                 <span className="hidden sm:inline">用量监控</span>
               </Button>
+              <Button
+                variant={activeTab === 'pool-status' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setActiveTab('pool-status')}
+                className="h-7 px-2 sm:px-3 text-xs"
+              >
+                <Zap className="h-3 w-3 sm:mr-1" />
+                <span className="hidden sm:inline">池状态</span>
+              </Button>
             </div>
           </div>
           <div className="flex items-center gap-1 sm:gap-2">
@@ -648,7 +658,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.4.1</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.4.2</span>
             <Button
               variant="outline"
               size="sm"
@@ -678,6 +688,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
           <ApiKeysPanel />
         ) : activeTab === 'balance-history' ? (
           <BalanceHistoryPanel />
+        ) : activeTab === 'pool-status' ? (
+          <PoolStatusPanel />
         ) : (
         <>
         {/* 统计卡片 */}

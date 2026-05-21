@@ -67,8 +67,7 @@ pub fn create_router_with_provider_and_state(
 
 fn build_router(state: AppState) -> Router {
     // 不需要认证的公开路由
-    let public_routes = Router::new()
-        .route("/v1/ping", get(ping));
+    let public_routes = Router::new().route("/v1/ping", get(ping));
 
     // 需要认证的 /v1 路由
     let v1_routes = Router::new()
@@ -82,7 +81,7 @@ fn build_router(state: AppState) -> Router {
         ));
 
     // 需要认证的 /cc/v1 路由（Claude Code 兼容端点）
-    // 与 /v1 的区别：流式响应会等待 contextUsageEvent 后再发送 message_start
+    // 流式响应优先快速首包，input_tokens 使用本地估算
     let cc_v1_routes = Router::new()
         .route("/messages", post(post_messages_cc))
         .route("/messages/count_tokens", post(count_tokens))

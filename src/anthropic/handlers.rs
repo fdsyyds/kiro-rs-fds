@@ -2,18 +2,17 @@
 
 use std::convert::Infallible;
 
-use anyhow::Error;
 use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
 use crate::token;
+use anyhow::Error;
 use axum::{
-    Json as JsonExtractor,
+    Extension, Json as JsonExtractor,
     body::Body,
     extract::State,
     http::{StatusCode, header},
     response::{IntoResponse, Json, Response},
-    Extension,
 };
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
@@ -23,9 +22,12 @@ use tokio::time::interval;
 use uuid::Uuid;
 
 use super::converter::{ConversionError, convert_request};
-use super::middleware::{AppState, ApiKeyContext};
+use super::middleware::{ApiKeyContext, AppState};
 use super::stream::{DelayedStreamContext, SseEvent, StreamContext};
-use super::types::{CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse, OutputConfig, Thinking};
+use super::types::{
+    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse,
+    OutputConfig, Thinking,
+};
 use super::websearch;
 
 /// GET /v1/ping
@@ -296,9 +298,7 @@ fn build_model_list() -> Vec<Model> {
 /// GET /v1/models/:model_id
 ///
 /// 返回指定模型的信息
-pub async fn get_model(
-    axum::extract::Path(model_id): axum::extract::Path<String>,
-) -> Response {
+pub async fn get_model(axum::extract::Path(model_id): axum::extract::Path<String>) -> Response {
     tracing::info!(model_id = %model_id, "Received GET /v1/models/:model_id request");
 
     // 复用 get_models 的模型列表，查找匹配的模型
@@ -363,12 +363,7 @@ pub async fn post_messages(
         tracing::info!("检测到 WebSearch 工具，路由到 WebSearch 处理");
 
         // 估算输入 tokens
-        let input_tokens = token::count_all_tokens(
-            payload.model.clone(),
-            payload.system.clone(),
-            payload.messages.clone(),
-            payload.tools.clone(),
-        ).await as i32;
+        let input_tokens = count_input_tokens_for_request(&payload).await;
 
         return websearch::handle_websearch_request(provider, &payload, input_tokens).await;
     }
@@ -421,21 +416,7 @@ pub async fn post_messages(
     let last_msg_tokens = token::count_last_message_tokens(&payload.messages) as i32;
 
     // 估算输入 tokens（诊断：记录耗时）
-    let t_count_start = std::time::Instant::now();
-    let input_tokens = token::count_all_tokens(
-        payload.model.clone(),
-        payload.system,
-        payload.messages,
-        payload.tools,
-    ).await as i32;
-    let count_tokens_ms = t_count_start.elapsed().as_millis();
-    if count_tokens_ms > 500 {
-        tracing::warn!(
-            count_tokens_ms = count_tokens_ms,
-            input_tokens = input_tokens,
-            "count_all_tokens 耗时过长"
-        );
-    }
+    let input_tokens = count_input_tokens_for_request(&payload).await;
 
     // 缓存命中 tokens = 总 input - 最后一条消息
     let cache_read_tokens = (input_tokens - last_msg_tokens).max(0);
@@ -530,6 +511,48 @@ async fn handle_stream_request(
 
 /// Ping 事件间隔（25秒）
 const PING_INTERVAL_SECS: u64 = 25;
+
+async fn count_input_tokens_for_request(payload: &MessagesRequest) -> i32 {
+    let t_count_start = std::time::Instant::now();
+    let input_tokens = if payload.stream {
+        let tokens = token::count_all_tokens_local(
+            payload.system.clone(),
+            payload.messages.clone(),
+            payload.tools.clone(),
+        );
+        tracing::debug!(
+            input_tokens = tokens,
+            "stream request uses local token estimate for lower TTFT"
+        );
+        tokens
+    } else {
+        token::count_all_tokens(
+            payload.model.clone(),
+            payload.system.clone(),
+            payload.messages.clone(),
+            payload.tools.clone(),
+        )
+        .await
+    } as i32;
+
+    let count_tokens_ms = t_count_start.elapsed().as_millis();
+    if count_tokens_ms > 500 {
+        tracing::warn!(
+            count_tokens_ms = count_tokens_ms,
+            input_tokens = input_tokens,
+            stream = payload.stream,
+            "count_all_tokens 耗时过长"
+        );
+    }
+
+    input_tokens
+}
+
+fn use_delayed_cc_stream() -> bool {
+    std::env::var("KIRO_CC_DELAYED_STREAM")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
+}
 
 /// 创建 ping 事件的 SSE 字符串
 fn create_ping_sse() -> Bytes {
@@ -704,14 +727,14 @@ async fn handle_non_stream_request(
                                 let input: serde_json::Value = if buffer.is_empty() {
                                     serde_json::json!({})
                                 } else {
-                                    serde_json::from_str(buffer)
-                                        .unwrap_or_else(|e| {
-                                            tracing::warn!(
-                                                "工具输入 JSON 解析失败: {}, tool_use_id: {}",
-                                                e, tool_use.tool_use_id
-                                            );
-                                            serde_json::json!({})
-                                        })
+                                    serde_json::from_str(buffer).unwrap_or_else(|e| {
+                                        tracing::warn!(
+                                            "工具输入 JSON 解析失败: {}, tool_use_id: {}",
+                                            e,
+                                            tool_use.tool_use_id
+                                        );
+                                        serde_json::json!({})
+                                    })
                                 };
 
                                 tool_uses.push(json!({
@@ -787,7 +810,13 @@ async fn handle_non_stream_request(
 
     // 记录用量
     if let (Some(tracker), Some(key_id)) = (&usage_tracker, api_key_id) {
-        tracker.record(key_id, model.to_string(), final_input_tokens, output_tokens, final_cache_read);
+        tracker.record(
+            key_id,
+            model.to_string(),
+            final_input_tokens,
+            output_tokens,
+            final_cache_read,
+        );
     }
 
     // 构建 Anthropic 响应（应用 Token 倍率）
@@ -843,7 +872,7 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
         thinking_type: thinking_type.to_string(),
         budget_tokens: 20000,
     });
-    
+
     if is_opus_adaptive {
         payload.output_config = Some(OutputConfig {
             effort: "high".to_string(),
@@ -868,7 +897,8 @@ pub async fn count_tokens(
         payload.system,
         payload.messages,
         payload.tools,
-    ).await as i32;
+    )
+    .await as i32;
 
     Json(CountTokensResponse {
         input_tokens: total_tokens.max(1) as i32,
@@ -878,8 +908,8 @@ pub async fn count_tokens(
 /// POST /cc/v1/messages
 ///
 /// Claude Code 兼容端点，与 /v1/messages 的区别在于：
-/// - 流式响应会等待 kiro 端返回 contextUsageEvent 后再发送 message_start
-/// - message_start 中的 input_tokens 是从 contextUsageEvent 计算的准确值
+/// - 流式响应优先快速首包，不等待 contextUsageEvent 后再发送 message_start
+/// - message_start 中的 input_tokens 使用本地估算，最终 usage 仍会尽量使用上游 contextUsageEvent 修正
 pub async fn post_messages_cc(
     State(state): State<AppState>,
     identity: Option<Extension<ApiKeyContext>>,
@@ -917,12 +947,7 @@ pub async fn post_messages_cc(
         tracing::info!("检测到 WebSearch 工具，路由到 WebSearch 处理");
 
         // 估算输入 tokens
-        let input_tokens = token::count_all_tokens(
-            payload.model.clone(),
-            payload.system.clone(),
-            payload.messages.clone(),
-            payload.tools.clone(),
-        ).await as i32;
+        let input_tokens = count_input_tokens_for_request(&payload).await;
 
         return websearch::handle_websearch_request(provider, &payload, input_tokens).await;
     }
@@ -975,21 +1000,7 @@ pub async fn post_messages_cc(
     let last_msg_tokens = token::count_last_message_tokens(&payload.messages) as i32;
 
     // 估算输入 tokens（诊断：记录耗时）
-    let t_count_start = std::time::Instant::now();
-    let input_tokens = token::count_all_tokens(
-        payload.model.clone(),
-        payload.system,
-        payload.messages,
-        payload.tools,
-    ).await as i32;
-    let count_tokens_ms = t_count_start.elapsed().as_millis();
-    if count_tokens_ms > 500 {
-        tracing::warn!(
-            count_tokens_ms = count_tokens_ms,
-            input_tokens = input_tokens,
-            "count_all_tokens 耗时过长"
-        );
-    }
+    let input_tokens = count_input_tokens_for_request(&payload).await;
 
     // 缓存命中 tokens = 总 input - 最后一条消息
     let cache_read_tokens = (input_tokens - last_msg_tokens).max(0);
@@ -1010,20 +1021,35 @@ pub async fn post_messages_cc(
     let output_multiplier = provider.token_manager().get_output_multiplier();
 
     if payload.stream {
-        // 流式响应（缓冲模式）
-        handle_stream_request_buffered(
-            provider,
-            &request_body,
-            &payload.model,
-            input_tokens,
-            cache_read_tokens,
-            thinking_enabled,
-            usage_tracker.clone(),
-            api_key_id,
-            input_multiplier,
-            output_multiplier,
-        )
-        .await
+        if use_delayed_cc_stream() {
+            handle_stream_request_buffered(
+                provider.clone(),
+                &request_body,
+                &payload.model,
+                input_tokens,
+                cache_read_tokens,
+                thinking_enabled,
+                usage_tracker.clone(),
+                api_key_id,
+                input_multiplier,
+                output_multiplier,
+            )
+            .await
+        } else {
+            handle_stream_request(
+                provider,
+                &request_body,
+                &payload.model,
+                input_tokens,
+                cache_read_tokens,
+                thinking_enabled,
+                usage_tracker.clone(),
+                api_key_id,
+                input_multiplier,
+                output_multiplier,
+            )
+            .await
+        }
     } else {
         // 非流式响应（复用现有逻辑，已经使用正确的 input_tokens）
         handle_non_stream_request(

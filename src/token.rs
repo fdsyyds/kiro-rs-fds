@@ -115,9 +115,8 @@ pub(crate) async fn count_all_tokens(
     if let Some(config) = get_config() {
         if let Some(api_url) = &config.api_url {
             // 异步调用远程 API（不再阻塞当前线程）
-            let result = call_remote_count_tokens(
-                api_url, config, model, &system, &messages, &tools,
-            ).await;
+            let result =
+                call_remote_count_tokens(api_url, config, model, &system, &messages, &tools).await;
 
             match result {
                 Ok(tokens) => {
@@ -182,7 +181,7 @@ async fn call_remote_count_tokens(
 }
 
 /// 本地计算请求的输入 tokens
-fn count_all_tokens_local(
+pub(crate) fn count_all_tokens_local(
     system: Option<Vec<SystemMessage>>,
     messages: Vec<Message>,
     tools: Option<Vec<Tool>>,

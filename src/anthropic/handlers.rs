@@ -70,6 +70,40 @@ fn log_stream_chunk_stage(
     );
 }
 
+fn log_stream_first_token_breakdown(
+    request_id: &str,
+    endpoint: &str,
+    stream_mode: &str,
+    request_start: Instant,
+    response_ready_at: Instant,
+    first_upstream_chunk_at: Instant,
+    first_visible_event_at: Instant,
+    chunk_bytes: usize,
+    decoded_events: usize,
+    emitted_events: usize,
+) {
+    tracing::info!(
+        request_id = %request_id,
+        endpoint = endpoint,
+        stream_mode = stream_mode,
+        request_to_response_ready_ms = response_ready_at.duration_since(request_start).as_millis(),
+        response_ready_to_first_upstream_chunk_ms = first_upstream_chunk_at
+            .duration_since(response_ready_at)
+            .as_millis(),
+        first_upstream_chunk_to_first_visible_event_ms = first_visible_event_at
+            .duration_since(first_upstream_chunk_at)
+            .as_millis(),
+        response_ready_to_first_visible_event_ms = first_visible_event_at
+            .duration_since(response_ready_at)
+            .as_millis(),
+        total_to_first_visible_event_ms = first_visible_event_at.duration_since(request_start).as_millis(),
+        chunk_bytes = chunk_bytes,
+        decoded_events = decoded_events,
+        emitted_events = emitted_events,
+        "stream_first_token_breakdown"
+    );
+}
+
 /// GET /v1/ping
 ///
 /// 诊断端点（无需认证），返回请求的关键信息，用于排查客户端连接问题
@@ -710,6 +744,8 @@ async fn handle_stream_request(
         request_start,
     );
 
+    let response_ready_at = Instant::now();
+
     // 创建 SSE 流
     let stream = create_sse_stream(
         response,
@@ -718,6 +754,7 @@ async fn handle_stream_request(
         request_id.clone(),
         endpoint,
         request_start,
+        response_ready_at,
     );
 
     // 返回 SSE 响应
@@ -753,6 +790,7 @@ fn create_sse_stream(
     request_id: String,
     endpoint: &'static str,
     request_start: Instant,
+    response_ready_at: Instant,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     // 先发送初始事件
     let initial_stream = stream::iter(
@@ -776,8 +814,10 @@ fn create_sse_stream(
             endpoint,
             request_start,
             stream_start,
+            response_ready_at,
             false,
             false,
+            None,
         ),
         |(
             mut body_stream,
@@ -789,8 +829,10 @@ fn create_sse_stream(
             endpoint,
             request_start,
             stream_start,
+            response_ready_at,
             mut first_upstream_chunk_logged,
             mut first_model_sse_logged,
+            mut first_upstream_chunk_at,
         )| async move {
             if finished {
                 return None;
@@ -802,7 +844,9 @@ fn create_sse_stream(
                 chunk_result = body_stream.next() => {
                     match chunk_result {
                         Some(Ok(chunk)) => {
+                            let chunk_at = Instant::now();
                             if !first_upstream_chunk_logged {
+                                first_upstream_chunk_at = Some(chunk_at);
                                 log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
@@ -846,12 +890,27 @@ fn create_sse_stream(
                                 .collect();
 
                             if !bytes.is_empty() && !first_model_sse_logged {
+                                let first_visible_event_at = Instant::now();
+                                let first_upstream_chunk_at =
+                                    first_upstream_chunk_at.unwrap_or(chunk_at);
                                 log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
                                     "stream_first_model_sse_events",
                                     stream_start,
                                     request_start,
+                                    chunk.len(),
+                                    decoded_event_count,
+                                    emitted_event_count,
+                                );
+                                log_stream_first_token_breakdown(
+                                    &request_id,
+                                    endpoint,
+                                    "stream",
+                                    request_start,
+                                    response_ready_at,
+                                    first_upstream_chunk_at,
+                                    first_visible_event_at,
                                     chunk.len(),
                                     decoded_event_count,
                                     emitted_event_count,
@@ -871,8 +930,10 @@ fn create_sse_stream(
                                     endpoint,
                                     request_start,
                                     stream_start,
+                                    response_ready_at,
                                     first_upstream_chunk_logged,
                                     first_model_sse_logged,
+                                    first_upstream_chunk_at,
                                 ),
                             ))
                         }
@@ -896,8 +957,10 @@ fn create_sse_stream(
                                     endpoint,
                                     request_start,
                                     stream_start,
+                                    response_ready_at,
                                     first_upstream_chunk_logged,
                                     first_model_sse_logged,
+                                    first_upstream_chunk_at,
                                 ),
                             ))
                         }
@@ -920,8 +983,10 @@ fn create_sse_stream(
                                     endpoint,
                                     request_start,
                                     stream_start,
+                                    response_ready_at,
                                     first_upstream_chunk_logged,
                                     first_model_sse_logged,
+                                    first_upstream_chunk_at,
                                 ),
                             ))
                         }
@@ -943,8 +1008,10 @@ fn create_sse_stream(
                             endpoint,
                             request_start,
                             stream_start,
+                            response_ready_at,
                             first_upstream_chunk_logged,
                             first_model_sse_logged,
+                            first_upstream_chunk_at,
                         ),
                     ))
                 }
@@ -1596,9 +1663,17 @@ async fn handle_stream_request_buffered(
         request_start,
     );
 
+    let response_ready_at = Instant::now();
+
     // 创建延迟 SSE 流
-    let stream =
-        create_delayed_sse_stream(response, ctx, request_id.clone(), endpoint, request_start);
+    let stream = create_delayed_sse_stream(
+        response,
+        ctx,
+        request_id.clone(),
+        endpoint,
+        request_start,
+        response_ready_at,
+    );
     log_request_stage(
         &request_id,
         endpoint,
@@ -1630,6 +1705,7 @@ fn create_delayed_sse_stream(
     request_id: String,
     endpoint: &'static str,
     request_start: Instant,
+    response_ready_at: Instant,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     let body_stream = response.bytes_stream();
     let stream_start = Instant::now();
@@ -1645,8 +1721,10 @@ fn create_delayed_sse_stream(
             endpoint,
             request_start,
             stream_start,
+            response_ready_at,
             false,
             false,
+            None,
         ),
         |(
             mut body_stream,
@@ -1658,8 +1736,10 @@ fn create_delayed_sse_stream(
             endpoint,
             request_start,
             stream_start,
+            response_ready_at,
             mut first_upstream_chunk_logged,
             mut first_flush_logged,
+            mut first_upstream_chunk_at,
         )| async move {
             if finished {
                 return None;
@@ -1687,8 +1767,10 @@ fn create_delayed_sse_stream(
                                     endpoint,
                                     request_start,
                                     stream_start,
+                                    response_ready_at,
                                     first_upstream_chunk_logged,
                                     first_flush_logged,
+                                    first_upstream_chunk_at,
                                 ),
                             ));
                         }
@@ -1696,7 +1778,9 @@ fn create_delayed_sse_stream(
                         chunk_result = body_stream.next() => {
                             match chunk_result {
                                 Some(Ok(chunk)) => {
+                                    let chunk_at = Instant::now();
                                     if !first_upstream_chunk_logged {
+                                        first_upstream_chunk_at = Some(chunk_at);
                                         log_stream_chunk_stage(
                                             &request_id,
                                             endpoint,
@@ -1729,12 +1813,27 @@ fn create_delayed_sse_stream(
                                                             .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                                             .collect();
                                                         if !first_flush_logged {
+                                                            let first_visible_event_at = Instant::now();
+                                                            let first_upstream_chunk_at =
+                                                                first_upstream_chunk_at.unwrap_or(chunk_at);
                                                             log_stream_chunk_stage(
                                                                 &request_id,
                                                                 endpoint,
                                                                 "delayed_stream_first_flush",
                                                                 stream_start,
                                                                 request_start,
+                                                                chunk.len(),
+                                                                decoded_event_count,
+                                                                emitted_event_count,
+                                                            );
+                                                            log_stream_first_token_breakdown(
+                                                                &request_id,
+                                                                endpoint,
+                                                                "delayed_stream",
+                                                                request_start,
+                                                                response_ready_at,
+                                                                first_upstream_chunk_at,
+                                                                first_visible_event_at,
                                                                 chunk.len(),
                                                                 decoded_event_count,
                                                                 emitted_event_count,
@@ -1754,8 +1853,10 @@ fn create_delayed_sse_stream(
                                                                 endpoint,
                                                                 request_start,
                                                                 stream_start,
+                                                                response_ready_at,
                                                                 first_upstream_chunk_logged,
                                                                 first_flush_logged,
+                                                                first_upstream_chunk_at,
                                                             ),
                                                         ));
                                                     }
@@ -1787,8 +1888,10 @@ fn create_delayed_sse_stream(
                                             endpoint,
                                             request_start,
                                             stream_start,
+                                            response_ready_at,
                                             first_upstream_chunk_logged,
                                             first_flush_logged,
+                                            first_upstream_chunk_at,
                                         ),
                                     ));
                                 }
@@ -1811,8 +1914,10 @@ fn create_delayed_sse_stream(
                                             endpoint,
                                             request_start,
                                             stream_start,
+                                            response_ready_at,
                                             first_upstream_chunk_logged,
                                             first_flush_logged,
+                                            first_upstream_chunk_at,
                                         ),
                                     ));
                                 }
@@ -1827,7 +1932,9 @@ fn create_delayed_sse_stream(
                 chunk_result = body_stream.next() => {
                     match chunk_result {
                         Some(Ok(chunk)) => {
+                            let chunk_at = Instant::now();
                             if !first_upstream_chunk_logged {
+                                first_upstream_chunk_at = Some(chunk_at);
                                 log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
@@ -1869,12 +1976,27 @@ fn create_delayed_sse_stream(
                                 .collect();
 
                             if !bytes.is_empty() && !first_flush_logged {
+                                let first_visible_event_at = Instant::now();
+                                let first_upstream_chunk_at =
+                                    first_upstream_chunk_at.unwrap_or(chunk_at);
                                 log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
                                     "delayed_stream_first_flush",
                                     stream_start,
                                     request_start,
+                                    chunk.len(),
+                                    decoded_event_count,
+                                    emitted_event_count,
+                                );
+                                log_stream_first_token_breakdown(
+                                    &request_id,
+                                    endpoint,
+                                    "delayed_stream",
+                                    request_start,
+                                    response_ready_at,
+                                    first_upstream_chunk_at,
+                                    first_visible_event_at,
                                     chunk.len(),
                                     decoded_event_count,
                                     emitted_event_count,
@@ -1894,8 +2016,10 @@ fn create_delayed_sse_stream(
                                     endpoint,
                                     request_start,
                                     stream_start,
+                                    response_ready_at,
                                     first_upstream_chunk_logged,
                                     first_flush_logged,
+                                    first_upstream_chunk_at,
                                 ),
                             ))
                         }
@@ -1918,8 +2042,10 @@ fn create_delayed_sse_stream(
                                     endpoint,
                                     request_start,
                                     stream_start,
+                                    response_ready_at,
                                     first_upstream_chunk_logged,
                                     first_flush_logged,
+                                    first_upstream_chunk_at,
                                 ),
                             ))
                         }
@@ -1942,8 +2068,10 @@ fn create_delayed_sse_stream(
                                     endpoint,
                                     request_start,
                                     stream_start,
+                                    response_ready_at,
                                     first_upstream_chunk_logged,
                                     first_flush_logged,
+                                    first_upstream_chunk_at,
                                 ),
                             ))
                         }
@@ -1965,8 +2093,10 @@ fn create_delayed_sse_stream(
                             endpoint,
                             request_start,
                             stream_start,
+                            response_ready_at,
                             first_upstream_chunk_logged,
                             first_flush_logged,
+                            first_upstream_chunk_at,
                         ),
                     ))
                 }

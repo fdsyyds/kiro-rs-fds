@@ -279,7 +279,7 @@ impl KiroProvider {
     /// # Returns
     /// 返回原始的 HTTP Response，不做解析
     pub async fn call_api(&self, request_body: &str) -> anyhow::Result<reqwest::Response> {
-        self.call_api_with_retry(request_body, false).await
+        self.call_api_with_retry(request_body, false, None).await
     }
 
     /// 发送流式 API 请求
@@ -296,7 +296,17 @@ impl KiroProvider {
     /// # Returns
     /// 返回原始的 HTTP Response，调用方负责处理流式数据
     pub async fn call_api_stream(&self, request_body: &str) -> anyhow::Result<reqwest::Response> {
-        self.call_api_with_retry(request_body, true).await
+        self.call_api_with_retry(request_body, true, None).await
+    }
+
+    /// 发送带 request_id 观测字段的流式 API 请求
+    pub async fn call_api_stream_with_request_id(
+        &self,
+        request_body: &str,
+        request_id: &str,
+    ) -> anyhow::Result<reqwest::Response> {
+        self.call_api_with_retry(request_body, true, Some(request_id))
+            .await
     }
 
     /// 发送 MCP API 请求
@@ -476,6 +486,7 @@ impl KiroProvider {
         &self,
         request_body: &str,
         is_stream: bool,
+        request_id: Option<&str>,
     ) -> anyhow::Result<reqwest::Response> {
         let provider_start = std::time::Instant::now();
         let api_type = if is_stream { "流式" } else { "非流式" };
@@ -483,6 +494,7 @@ impl KiroProvider {
         let _permit = self.concurrency_limit.acquire().await?;
         let sem_wait_ms = t_sem_start.elapsed().as_millis();
         tracing::info!(
+            request_id = request_id.unwrap_or(""),
             api_type = api_type,
             sem_wait_ms = sem_wait_ms,
             elapsed_ms = provider_start.elapsed().as_millis(),
@@ -517,6 +529,7 @@ impl KiroProvider {
             };
             let ctx_ms = t_ctx_start.elapsed().as_millis();
             tracing::info!(
+                request_id = request_id.unwrap_or(""),
                 api_type = api_type,
                 credential_id = ctx.id,
                 acquire_context_ms = ctx_ms,
@@ -568,6 +581,7 @@ impl KiroProvider {
 
             let status = response.status();
             tracing::info!(
+                request_id = request_id.unwrap_or(""),
                 api_type = api_type,
                 credential_id = ctx.id,
                 status = %status,

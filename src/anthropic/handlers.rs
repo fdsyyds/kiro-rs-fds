@@ -47,6 +47,29 @@ fn log_request_stage(
     );
 }
 
+fn log_stream_chunk_stage(
+    request_id: &str,
+    endpoint: &str,
+    stage: &str,
+    stage_start: Instant,
+    request_start: Instant,
+    chunk_bytes: usize,
+    decoded_events: usize,
+    emitted_events: usize,
+) {
+    tracing::info!(
+        request_id = %request_id,
+        endpoint = endpoint,
+        stage = stage,
+        stage_ms = stage_start.elapsed().as_millis(),
+        elapsed_ms = request_start.elapsed().as_millis(),
+        chunk_bytes = chunk_bytes,
+        decoded_events = decoded_events,
+        emitted_events = emitted_events,
+        "request_timing"
+    );
+}
+
 /// GET /v1/ping
 ///
 /// 诊断端点（无需认证），返回请求的关键信息，用于排查客户端连接问题
@@ -647,7 +670,10 @@ async fn handle_stream_request(
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let stage_start = Instant::now();
-    let response = match provider.call_api_stream(request_body).await {
+    let response = match provider
+        .call_api_stream_with_request_id(request_body, &request_id)
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => return map_provider_error(e),
     };
@@ -777,12 +803,15 @@ fn create_sse_stream(
                     match chunk_result {
                         Some(Ok(chunk)) => {
                             if !first_upstream_chunk_logged {
-                                log_request_stage(
+                                log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
                                     "stream_first_upstream_chunk",
                                     stream_start,
                                     request_start,
+                                    chunk.len(),
+                                    0,
+                                    0,
                                 );
                                 first_upstream_chunk_logged = true;
                             }
@@ -793,10 +822,12 @@ fn create_sse_stream(
                             }
 
                             let mut events = Vec::new();
+                            let mut decoded_event_count = 0usize;
                             for result in decoder.decode_iter() {
                                 match result {
                                     Ok(frame) => {
                                         if let Ok(event) = Event::from_frame(frame) {
+                                            decoded_event_count += 1;
                                             let sse_events = ctx.process_kiro_event(&event);
                                             events.extend(sse_events);
                                         }
@@ -808,18 +839,22 @@ fn create_sse_stream(
                             }
 
                             // 转换为 SSE 字节流
+                            let emitted_event_count = events.len();
                             let bytes: Vec<Result<Bytes, Infallible>> = events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
                             if !bytes.is_empty() && !first_model_sse_logged {
-                                log_request_stage(
+                                log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
                                     "stream_first_model_sse_events",
                                     stream_start,
                                     request_start,
+                                    chunk.len(),
+                                    decoded_event_count,
+                                    emitted_event_count,
                                 );
                                 first_model_sse_logged = true;
                             }
@@ -1096,6 +1131,8 @@ async fn handle_non_stream_request(
         request_start,
     );
 
+    let stage_start = Instant::now();
+
     // 使用从 contextUsageEvent 计算的 input_tokens，如果没有则使用估算值
     let final_input_tokens = context_input_tokens.unwrap_or(input_tokens);
 
@@ -1105,8 +1142,16 @@ async fn handle_non_stream_request(
     } else {
         cache_read_tokens
     };
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "calculate_final_usage_tokens",
+        stage_start,
+        request_start,
+    );
 
     // 记录用量
+    let stage_start = Instant::now();
     if let (Some(tracker), Some(key_id)) = (&usage_tracker, api_key_id) {
         tracker.record(
             key_id,
@@ -1116,8 +1161,16 @@ async fn handle_non_stream_request(
             final_cache_read,
         );
     }
+    log_request_stage(
+        &request_id,
+        endpoint,
+        "record_usage",
+        stage_start,
+        request_start,
+    );
 
     // 构建 Anthropic 响应（应用 Token 倍率）
+    let stage_start = Instant::now();
     let reported_input = (final_input_tokens as f64 * input_multiplier) as i32;
     let reported_output = (output_tokens as f64 * output_multiplier) as i32;
     let response_body = json!({
@@ -1138,7 +1191,7 @@ async fn handle_non_stream_request(
         &request_id,
         endpoint,
         "build_non_stream_response",
-        request_start,
+        stage_start,
         request_start,
     );
     (StatusCode::OK, Json(response_body)).into_response()
@@ -1514,7 +1567,10 @@ async fn handle_stream_request_buffered(
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let stage_start = Instant::now();
-    let response = match provider.call_api_stream(request_body).await {
+    let response = match provider
+        .call_api_stream_with_request_id(request_body, &request_id)
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => return map_provider_error(e),
     };
@@ -1641,12 +1697,15 @@ fn create_delayed_sse_stream(
                             match chunk_result {
                                 Some(Ok(chunk)) => {
                                     if !first_upstream_chunk_logged {
-                                        log_request_stage(
+                                        log_stream_chunk_stage(
                                             &request_id,
                                             endpoint,
                                             "stream_first_upstream_chunk",
                                             stream_start,
                                             request_start,
+                                            chunk.len(),
+                                            0,
+                                            0,
                                         );
                                         first_upstream_chunk_logged = true;
                                     }
@@ -1655,24 +1714,30 @@ fn create_delayed_sse_stream(
                                         tracing::warn!("缓冲区溢出: {}", e);
                                     }
 
+                                    let mut decoded_event_count = 0usize;
                                     for result in decoder.decode_iter() {
                                         match result {
                                             Ok(frame) => {
                                                 if let Ok(event) = Event::from_frame(frame) {
+                                                    decoded_event_count += 1;
                                                     let sse_events = ctx.process_event(&event);
                                                     // 如果切换到了 Streaming 阶段，flush 缓冲事件
                                                     if ctx.is_streaming() && !sse_events.is_empty() {
+                                                        let emitted_event_count = sse_events.len();
                                                         let bytes: Vec<Result<Bytes, Infallible>> = sse_events
                                                             .into_iter()
                                                             .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                                             .collect();
                                                         if !first_flush_logged {
-                                                            log_request_stage(
+                                                            log_stream_chunk_stage(
                                                                 &request_id,
                                                                 endpoint,
                                                                 "delayed_stream_first_flush",
                                                                 stream_start,
                                                                 request_start,
+                                                                chunk.len(),
+                                                                decoded_event_count,
+                                                                emitted_event_count,
                                                             );
                                                             first_flush_logged = true;
                                                         }
@@ -1763,12 +1828,15 @@ fn create_delayed_sse_stream(
                     match chunk_result {
                         Some(Ok(chunk)) => {
                             if !first_upstream_chunk_logged {
-                                log_request_stage(
+                                log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
                                     "stream_first_upstream_chunk",
                                     stream_start,
                                     request_start,
+                                    chunk.len(),
+                                    0,
+                                    0,
                                 );
                                 first_upstream_chunk_logged = true;
                             }
@@ -1778,10 +1846,12 @@ fn create_delayed_sse_stream(
                             }
 
                             let mut events = Vec::new();
+                            let mut decoded_event_count = 0usize;
                             for result in decoder.decode_iter() {
                                 match result {
                                     Ok(frame) => {
                                         if let Ok(event) = Event::from_frame(frame) {
+                                            decoded_event_count += 1;
                                             let sse_events = ctx.process_event(&event);
                                             events.extend(sse_events);
                                         }
@@ -1792,18 +1862,22 @@ fn create_delayed_sse_stream(
                                 }
                             }
 
+                            let emitted_event_count = events.len();
                             let bytes: Vec<Result<Bytes, Infallible>> = events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
                             if !bytes.is_empty() && !first_flush_logged {
-                                log_request_stage(
+                                log_stream_chunk_stage(
                                     &request_id,
                                     endpoint,
                                     "delayed_stream_first_flush",
                                     stream_start,
                                     request_start,
+                                    chunk.len(),
+                                    decoded_event_count,
+                                    emitted_event_count,
                                 );
                                 first_flush_logged = true;
                             }

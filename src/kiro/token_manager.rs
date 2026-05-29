@@ -1422,6 +1422,12 @@ impl MultiTokenManager {
         let mut entries = self.entries.lock();
         if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
             let cooldown_secs = *self.cooldown_seconds.lock();
+            if cooldown_secs == 0 {
+                entry.cooldown_until = None;
+                tracing::warn!("凭据 #{} 触发 429 限流，429 冷却已禁用", id);
+                return;
+            }
+
             entry.cooldown_until = Some(Utc::now() + Duration::seconds(cooldown_secs as i64));
             tracing::warn!(
                 "凭据 #{} 触发 429 限流，进入冷却 {}s",

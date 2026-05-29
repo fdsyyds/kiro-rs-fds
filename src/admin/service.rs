@@ -429,11 +429,6 @@ impl AdminService {
 
     /// 设置 429 冷却时长（秒）
     pub fn set_cooldown_seconds(&self, seconds: u64) -> Result<(), AdminServiceError> {
-        if seconds == 0 {
-            return Err(AdminServiceError::InvalidCredential(
-                "冷却时长必须大于 0".to_string(),
-            ));
-        }
         self.token_manager.set_cooldown_seconds(seconds);
         Ok(())
     }

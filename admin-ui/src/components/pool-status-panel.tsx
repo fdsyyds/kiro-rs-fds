@@ -72,7 +72,7 @@ export function PoolStatusPanel() {
             <div className="flex items-center gap-2">
               <Input
                 type="number"
-                min={1}
+                min={0}
                 value={cooldownInput}
                 onChange={(e) => { setCooldownInput(e.target.value); setIsEditing(true) }}
                 className="w-24 h-8 text-sm"
@@ -86,8 +86,8 @@ export function PoolStatusPanel() {
                   disabled={isPending}
                   onClick={() => {
                     const val = parseInt(cooldownInput)
-                    if (val > 0) saveCooldown(val)
-                    else toast.error('冷却时长必须大于 0')
+                    if (!Number.isNaN(val) && val >= 0) saveCooldown(val)
+                    else toast.error('冷却时长必须大于或等于 0')
                   }}
                 >
                   <Save className="h-3 w-3 mr-1" />

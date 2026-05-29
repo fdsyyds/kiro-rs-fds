@@ -96,6 +96,7 @@ Complete all chunked operations without commentary.";
 /// - 其他 sonnet → claude-sonnet-4.5
 /// - opus 4.5/4-5 → claude-opus-4.5
 /// - opus 4.7/4-7 → claude-opus-4.7
+/// - opus 4.8/4-8 → claude-opus-4.8
 /// - 其他 opus → claude-opus-4.6
 /// - 所有 haiku → claude-haiku-4.5
 pub fn map_model(model: &str) -> Option<String> {
@@ -112,6 +113,8 @@ pub fn map_model(model: &str) -> Option<String> {
             Some("claude-opus-4.5".to_string())
         } else if model_lower.contains("4-7") || model_lower.contains("4.7") {
             Some("claude-opus-4.7".to_string())
+        } else if model_lower.contains("4-8") || model_lower.contains("4.8") {
+            Some("claude-opus-4.8".to_string())
         } else {
             Some("claude-opus-4.6".to_string())
         }
@@ -905,6 +908,20 @@ mod tests {
         // thinking 后缀不应影响 opus 4.6 模型映射
         let result = map_model("claude-opus-4-6-thinking");
         assert_eq!(result, Some("claude-opus-4.6".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_opus_4_8() {
+        // opus 4.8 模型映射
+        let result = map_model("claude-opus-4-8");
+        assert_eq!(result, Some("claude-opus-4.8".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_thinking_suffix_opus_4_8() {
+        // thinking 后缀不应影响 opus 4.8 模型映射
+        let result = map_model("claude-opus-4-8-thinking");
+        assert_eq!(result, Some("claude-opus-4.8".to_string()));
     }
 
     #[test]

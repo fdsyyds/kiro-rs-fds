@@ -97,6 +97,9 @@ export function useDeleteCredential() {
     mutationFn: (id: number) => deleteCredential(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['balanceHistory'] })
+      queryClient.invalidateQueries({ queryKey: ['pool-status'] })
+      queryClient.invalidateQueries({ queryKey: ['credential-balance'] })
     },
   })
 }

@@ -1237,14 +1237,17 @@ async fn handle_non_stream_request(
 
     // 记录用量
     let stage_start = Instant::now();
-    if let (Some(tracker), Some(key_id)) = (&usage_tracker, api_key_id) {
-        tracker.record(
-            key_id,
-            model.to_string(),
-            final_input_tokens,
-            output_tokens,
-            final_cache_read,
-        );
+    if let (Some(tracker), Some(key_id)) = (usage_tracker, api_key_id) {
+        let model = model.to_string();
+        tokio::task::spawn_blocking(move || {
+            tracker.record(
+                key_id,
+                model,
+                final_input_tokens,
+                output_tokens,
+                final_cache_read,
+            );
+        });
     }
     log_request_stage(
         &request_id,

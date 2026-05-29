@@ -1,7 +1,6 @@
 //! Admin API 业务逻辑服务
 
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -257,11 +256,32 @@ impl AdminService {
 
     /// 获取所有凭据的余额历史
     pub fn get_all_balance_history(&self) -> HashMap<String, Vec<BalanceHistoryEntry>> {
-        let history = self.balance_history.lock();
-        history
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.iter().cloned().collect()))
-            .collect()
+        let active_ids: HashSet<u64> = self
+            .token_manager
+            .snapshot()
+            .entries
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+
+        let (history_map, removed_stale_history) = {
+            let mut history = self.balance_history.lock();
+            let before_len = history.len();
+            history.retain(|id, _| active_ids.contains(id));
+
+            let map = history
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.iter().cloned().collect()))
+                .collect();
+
+            (map, history.len() != before_len)
+        };
+
+        if removed_stale_history {
+            self.save_balance_history();
+        }
+
+        history_map
     }
 
     /// 获取单个凭据的余额历史

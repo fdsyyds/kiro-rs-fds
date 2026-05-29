@@ -1107,14 +1107,18 @@ impl StreamContext {
         };
 
         // 记录用量
-        if let (Some(tracker), Some(key_id)) = (&self.usage_tracker, self.api_key_id) {
-            tracker.record(
-                key_id,
-                self.model.clone(),
-                final_input_tokens,
-                self.output_tokens,
-                final_cache_read,
-            );
+        if let (Some(tracker), Some(key_id)) = (self.usage_tracker.clone(), self.api_key_id) {
+            let model = self.model.clone();
+            let output_tokens = self.output_tokens;
+            tokio::task::spawn_blocking(move || {
+                tracker.record(
+                    key_id,
+                    model,
+                    final_input_tokens,
+                    output_tokens,
+                    final_cache_read,
+                );
+            });
         }
 
         // 生成最终事件（应用 Token 倍率）

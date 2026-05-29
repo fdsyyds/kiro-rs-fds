@@ -2003,34 +2003,24 @@ impl MultiTokenManager {
 
     /// 删除凭据（Admin API）
     ///
-    /// # 前置条件
-    /// - 凭据必须已禁用（disabled = true）
-    ///
     /// # 行为
     /// 1. 验证凭据存在
-    /// 2. 验证凭据已禁用
-    /// 3. 从 entries 移除
-    /// 4. 如果删除的是当前凭据，切换到优先级最高的可用凭据
-    /// 5. 如果删除后没有凭据，将 current_id 重置为 0
-    /// 6. 持久化到文件
+    /// 2. 从 entries 移除
+    /// 3. 如果删除的是当前凭据，切换到优先级最高的可用凭据
+    /// 4. 如果删除后没有凭据，将 current_id 重置为 0
+    /// 5. 持久化到文件
     ///
     /// # 返回
     /// - `Ok(())` - 删除成功
-    /// - `Err(_)` - 凭据不存在、未禁用或持久化失败
+    /// - `Err(_)` - 凭据不存在或持久化失败
     pub fn delete_credential(&self, id: u64) -> anyhow::Result<()> {
         let was_current = {
             let mut entries = self.entries.lock();
 
-            // 查找凭据
-            let entry = entries
+            entries
                 .iter()
                 .find(|e| e.id == id)
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
-
-            // 检查是否已禁用
-            if !entry.disabled {
-                anyhow::bail!("只能删除已禁用的凭据（请先禁用凭据 #{}）", id);
-            }
 
             // 记录是否是当前凭据
             let current_id = *self.current_id.lock();
@@ -2062,6 +2052,31 @@ impl MultiTokenManager {
 
         tracing::info!("已删除凭据 #{}", id);
         Ok(())
+    }
+
+    /// 删除全部凭据（Admin API）
+    pub fn delete_all_credentials(&self) -> anyhow::Result<usize> {
+        let deleted_count = {
+            let mut entries = self.entries.lock();
+            let count = entries.len();
+            entries.clear();
+            count
+        };
+
+        {
+            let mut current_id = self.current_id.lock();
+            *current_id = 0;
+        }
+
+        {
+            let mut refresh_locks = self.refresh_locks.lock();
+            refresh_locks.clear();
+        }
+
+        self.persist_credentials()?;
+
+        tracing::info!("已删除全部凭据，共 {} 个", deleted_count);
+        Ok(deleted_count)
     }
 
     /// 获取负载均衡模式（Admin API）

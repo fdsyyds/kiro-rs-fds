@@ -10,8 +10,8 @@ use super::{
     middleware::AdminState,
     types::{
         AddCredentialRequest, ExportCredentialsRequest, SetDisabledRequest,
-        SetLoadBalancingModeRequest, SetPriorityRequest,
-        SetMultipliersRequest, SuccessResponse, UpdateCredentialRequest,
+        SetLoadBalancingModeRequest, SetMultipliersRequest, SetPriorityRequest, SuccessResponse,
+        UpdateCredentialRequest,
     },
 };
 
@@ -113,6 +113,19 @@ pub async fn delete_credential(
 ) -> impl IntoResponse {
     match state.service.delete_credential(id) {
         Ok(_) => Json(SuccessResponse::new(format!("凭据 #{} 已删除", id))).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// DELETE /api/admin/credentials
+/// 删除全部凭据
+pub async fn delete_all_credentials(State(state): State<AdminState>) -> impl IntoResponse {
+    match state.service.delete_all_credentials() {
+        Ok(count) => Json(SuccessResponse::new(format!(
+            "已删除全部凭据，共 {} 个",
+            count
+        )))
+        .into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

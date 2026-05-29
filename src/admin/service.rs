@@ -16,7 +16,7 @@ use super::error::AdminServiceError;
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceHistoryEntry, BalanceResponse,
     CredentialStatusItem, CredentialsStatusResponse, LoadBalancingModeResponse,
-    SetLoadBalancingModeRequest, SetMultipliersRequest, MultipliersResponse,
+    MultipliersResponse, SetLoadBalancingModeRequest, SetMultipliersRequest,
     UpdateCredentialRequest,
 };
 
@@ -346,6 +346,28 @@ impl AdminService {
         Ok(())
     }
 
+    /// 删除全部凭据
+    pub fn delete_all_credentials(&self) -> Result<usize, AdminServiceError> {
+        let deleted_count = self
+            .token_manager
+            .delete_all_credentials()
+            .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
+
+        {
+            let mut cache = self.balance_cache.lock();
+            cache.clear();
+        }
+        self.save_balance_cache();
+
+        {
+            let mut history = self.balance_history.lock();
+            history.clear();
+        }
+        self.save_balance_history();
+
+        Ok(deleted_count)
+    }
+
     /// 更新凭据配置
     pub async fn update_credential(
         &self,
@@ -629,8 +651,6 @@ impl AdminService {
         let msg = e.to_string();
         if msg.contains("不存在") {
             AdminServiceError::NotFound { id }
-        } else if msg.contains("只能删除已禁用的凭据") || msg.contains("请先禁用凭据") {
-            AdminServiceError::InvalidCredential(msg)
         } else {
             AdminServiceError::InternalError(msg)
         }

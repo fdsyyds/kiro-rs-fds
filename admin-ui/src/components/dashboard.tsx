@@ -16,7 +16,7 @@ import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-
 import { ApiKeysPanel } from '@/components/api-keys-panel'
 import { BalanceHistoryPanel } from '@/components/balance-history-panel'
 import { PoolStatusPanel } from '@/components/pool-status-panel'
-import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode, useRpm, useMultipliers, useSetMultipliers } from '@/hooks/use-credentials'
+import { useCredentials, useDeleteCredential, useDeleteAllCredentials, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode, useRpm, useMultipliers, useSetMultipliers } from '@/hooks/use-credentials'
 import { getCredentialBalance, exportCredentials } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
 import type { BalanceResponse } from '@/types/api'
@@ -57,6 +57,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const { data, isLoading, error, refetch } = useCredentials()
   const { data: rpmData } = useRpm()
   const { mutate: deleteCredential } = useDeleteCredential()
+  const { mutate: deleteAllCredentials, isPending: isDeletingAllCredentials } = useDeleteAllCredentials()
   const { mutate: resetFailure } = useResetFailure()
   const { data: loadBalancingData, isLoading: isLoadingMode } = useLoadBalancingMode()
   const { mutate: setLoadBalancingMode, isPending: isSettingMode } = useSetLoadBalancingMode()
@@ -113,11 +114,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
     acc[tier] = (acc[tier] || 0) + 1
     return acc
   }, {})
-  const selectedDisabledCount = Array.from(selectedIds).filter(id => {
-    const credential = data?.credentials.find(c => c.id === id)
-    return Boolean(credential?.disabled)
-  }).length
-
   // 筛选或凭据列表变化时重置到第一页
   useEffect(() => {
     setCurrentPage(1)
@@ -193,34 +189,23 @@ export function Dashboard({ onLogout }: DashboardProps) {
     setSelectedIds(new Set())
   }
 
-  // 批量删除（仅删除已禁用项）
+  // 批量删除选中凭据
   const handleBatchDelete = async () => {
     if (selectedIds.size === 0) {
       toast.error('请先选择要删除的凭据')
       return
     }
 
-    const disabledIds = Array.from(selectedIds).filter(id => {
-      const credential = data?.credentials.find(c => c.id === id)
-      return Boolean(credential?.disabled)
-    })
+    const ids = Array.from(selectedIds)
 
-    if (disabledIds.length === 0) {
-      toast.error('选中的凭据中没有已禁用项')
-      return
-    }
-
-    const skippedCount = selectedIds.size - disabledIds.length
-    const skippedText = skippedCount > 0 ? `（将跳过 ${skippedCount} 个未禁用凭据）` : ''
-
-    if (!confirm(`确定要删除 ${disabledIds.length} 个已禁用凭据吗？此操作无法撤销。${skippedText}`)) {
+    if (!confirm(`确定要删除选中的 ${ids.length} 个凭据吗？此操作无法撤销。`)) {
       return
     }
 
     let successCount = 0
     let failCount = 0
 
-    for (const id of disabledIds) {
+    for (const id of ids) {
       try {
         await new Promise<void>((resolve, reject) => {
           deleteCredential(id, {
@@ -239,12 +224,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
       }
     }
 
-    const skippedResultText = skippedCount > 0 ? `，已跳过 ${skippedCount} 个未禁用凭据` : ''
-
     if (failCount === 0) {
-      toast.success(`成功删除 ${successCount} 个已禁用凭据${skippedResultText}`)
+      toast.success(`成功删除 ${successCount} 个凭据`)
     } else {
-      toast.warning(`删除已禁用凭据：成功 ${successCount} 个，失败 ${failCount} 个${skippedResultText}`)
+      toast.warning(`删除凭据：成功 ${successCount} 个，失败 ${failCount} 个`)
     }
 
     deselectAll()
@@ -345,6 +328,35 @@ export function Dashboard({ onLogout }: DashboardProps) {
     }
 
     deselectAll()
+  }
+
+  // 删除全部凭据
+  const handleDeleteAllCredentials = () => {
+    const total = data?.credentials.length || 0
+    if (total === 0) {
+      toast.error('没有可删除的凭据')
+      return
+    }
+
+    if (!confirm(`确定要删除全部 ${total} 个凭据吗？此操作无法撤销。`)) {
+      return
+    }
+
+    if (!confirm('再次确认：这会删除所有凭据，包括正常启用的凭据。是否继续？')) {
+      return
+    }
+
+    deleteAllCredentials(undefined, {
+      onSuccess: (res) => {
+        toast.success(res.message)
+        deselectAll()
+        setBalanceMap(new Map())
+        setLoadingBalanceIds(new Set())
+      },
+      onError: (error) => {
+        toast.error('删除全部凭据失败: ' + extractErrorMessage(error))
+      }
+    })
   }
 
   // 导出凭据
@@ -683,7 +695,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.4.5</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.4.9</span>
             <Button
               variant="outline"
               size="sm"
@@ -843,6 +855,18 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   <span className="hidden sm:inline">清除已禁用</span>
                 </Button>
               )}
+              {data?.credentials && data.credentials.length > 0 && (
+                <Button
+                  onClick={handleDeleteAllCredentials}
+                  size="sm"
+                  variant="destructive"
+                  disabled={isDeletingAllCredentials}
+                  title="删除全部凭据"
+                >
+                  <Trash2 className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">删除全部</span>
+                </Button>
+              )}
               <Button onClick={() => setKamImportDialogOpen(true)} size="sm" variant="outline">
                 <FileUp className="h-4 w-4 sm:mr-2" />
                 <span className="hidden sm:inline">KAM 导入</span>
@@ -978,8 +1002,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
               onClick={handleBatchDelete}
               size="sm"
               variant="destructive"
-              disabled={selectedDisabledCount === 0}
-              title={selectedDisabledCount === 0 ? '只能删除已禁用凭据' : undefined}
             >
               <Trash2 className="h-4 w-4 mr-1" />删除
             </Button>

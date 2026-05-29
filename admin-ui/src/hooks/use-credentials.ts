@@ -7,6 +7,7 @@ import {
   getCredentialBalance,
   addCredential,
   deleteCredential,
+  deleteAllCredentials,
   updateCredential,
   getLoadBalancingMode,
   setLoadBalancingMode,
@@ -96,6 +97,19 @@ export function useDeleteCredential() {
     mutationFn: (id: number) => deleteCredential(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 删除全部凭据
+export function useDeleteAllCredentials() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: deleteAllCredentials,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['balanceHistory'] })
+      queryClient.invalidateQueries({ queryKey: ['pool-status'] })
     },
   })
 }

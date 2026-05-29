@@ -92,6 +92,12 @@ export async function deleteCredential(id: number): Promise<SuccessResponse> {
   return data
 }
 
+// 删除全部凭据
+export async function deleteAllCredentials(): Promise<SuccessResponse> {
+  const { data } = await api.delete<SuccessResponse>('/credentials')
+  return data
+}
+
 // 更新凭据
 export async function updateCredential(id: number, req: UpdateCredentialRequest): Promise<SuccessResponse> {
   const { data } = await api.put<SuccessResponse>(`/credentials/${id}`, req)

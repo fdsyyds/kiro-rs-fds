@@ -544,7 +544,7 @@ pub async fn post_messages(
     let stage_start = Instant::now();
     let kiro_request = KiroRequest {
         conversation_state: conversion_result.conversation_state,
-        profile_arn: state.profile_arn.clone(),
+        profile_arn: None, // 由 provider 根据实际选中的凭据动态注入
     };
     log_request_stage(
         &request_id,
@@ -1474,7 +1474,7 @@ pub async fn post_messages_cc(
     let stage_start = Instant::now();
     let kiro_request = KiroRequest {
         conversation_state: conversion_result.conversation_state,
-        profile_arn: state.profile_arn.clone(),
+        profile_arn: None, // 由 provider 根据实际选中的凭据动态注入
     };
     log_request_stage(
         &request_id,

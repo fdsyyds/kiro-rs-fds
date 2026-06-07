@@ -146,6 +146,31 @@ impl KiroProvider {
         )
     }
 
+    /// 将当前凭据的 profileArn 注入到请求体中
+    ///
+    /// 每次选好凭据后调用，确保请求体中的 profileArn 与实际使用的凭据一致。
+    /// 故障转移时凭据会变，所以需要在循环内动态注入。
+    fn inject_profile_arn(request_body: &str, credentials: &KiroCredentials) -> String {
+        use serde_json::Value;
+
+        let Ok(mut json) = serde_json::from_str::<Value>(request_body) else {
+            return request_body.to_string();
+        };
+
+        if let Some(obj) = json.as_object_mut() {
+            if let Some(profile_arn) = &credentials.profile_arn {
+                obj.insert(
+                    "profileArn".to_string(),
+                    Value::String(profile_arn.clone()),
+                );
+            } else {
+                obj.remove("profileArn");
+            }
+        }
+
+        serde_json::to_string(&json).unwrap_or_else(|_| request_body.to_string())
+    }
+
     /// 从请求体中提取模型信息
     ///
     /// 尝试解析 JSON 请求体，提取 conversationState.currentMessage.userInputMessage.modelId
@@ -357,12 +382,15 @@ impl KiroProvider {
                 }
             };
 
+            // 动态注入当前凭据的 profileArn
+            let body_with_arn = Self::inject_profile_arn(request_body, &ctx.credentials);
+
             // 发送请求
             let response = match self
                 .client_for(&ctx.credentials)?
                 .post(&url)
                 .headers(headers)
-                .body(request_body.to_string())
+                .body(body_with_arn)
                 .send()
                 .await
             {
@@ -550,13 +578,16 @@ impl KiroProvider {
                 }
             };
 
+            // 动态注入当前凭据的 profileArn
+            let body_with_arn = Self::inject_profile_arn(request_body, &ctx.credentials);
+
             // 发送请求
             let t_send_start = std::time::Instant::now();
             let response = match self
                 .client_for(&ctx.credentials)?
                 .post(&url)
                 .headers(headers)
-                .body(request_body.to_string())
+                .body(body_with_arn)
                 .send()
                 .await
             {

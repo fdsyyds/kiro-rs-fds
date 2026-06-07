@@ -33,6 +33,7 @@ interface KamAccount {
   }
   machineId?: string
   status?: string
+  profileArn?: string
 }
 
 interface VerificationResult {
@@ -66,13 +67,14 @@ function isValidKamAccount(item: unknown): item is KamAccount {
 function normalizeToKamAccount(item: unknown): unknown {
   if (typeof item !== 'object' || item === null) return item
   const obj = item as Record<string, unknown>
-  // 已有 credentials 结构，无需转换
+  // 已有 credentials 结构，确保顶层 profileArn 保留
   if (typeof obj.credentials === 'object' && obj.credentials !== null) return item
   // 顶层有 refreshToken，自动包装
   if (typeof obj.refreshToken === 'string' && obj.refreshToken.trim().length > 0) {
-    const { refreshToken, clientId, clientSecret, region, authMethod, startUrl, ...rest } = obj
+    const { refreshToken, clientId, clientSecret, region, authMethod, startUrl, profileArn, ...rest } = obj
     return {
       ...rest,
+      profileArn,
       credentials: { refreshToken, clientId, clientSecret, region, authMethod, startUrl },
     }
   }
@@ -256,6 +258,7 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             clientSecret,
             machineId: account.machineId?.trim() || undefined,
             email: account.email?.trim() || undefined,
+            profileArn: account.profileArn?.trim() || undefined,
           })
 
           addedCredId = addedCred.credentialId

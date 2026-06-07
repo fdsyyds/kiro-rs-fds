@@ -73,6 +73,7 @@ export interface AddCredentialRequest {
   proxyUrl?: string
   proxyUsername?: string
   proxyPassword?: string
+  profileArn?: string
 }
 
 // 更新凭据请求

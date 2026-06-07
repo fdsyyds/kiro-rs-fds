@@ -124,6 +124,9 @@ pub struct AddCredentialRequest {
 
     /// 凭据级代理认证密码（可选）
     pub proxy_password: Option<String>,
+
+    /// Profile ARN（可选，IdC 认证需要，用于获取使用额度）
+    pub profile_arn: Option<String>,
 }
 
 fn default_auth_method() -> String {

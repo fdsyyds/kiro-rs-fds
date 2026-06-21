@@ -665,6 +665,13 @@ impl KiroProvider {
 
             // 400 Bad Request - 请求问题，重试/切换凭据无意义
             if status.as_u16() == 400 {
+                tracing::error!(
+                    request_id = request_id.unwrap_or(""),
+                    api_type = api_type,
+                    upstream_response = %body,
+                    request_body = %request_body,
+                    "上游返回 400，打印请求体用于排查"
+                );
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
 

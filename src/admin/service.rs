@@ -475,6 +475,17 @@ impl AdminService {
         Ok(())
     }
 
+    /// 获取余额监控开关状态
+    pub fn get_balance_monitoring(&self) -> bool {
+        self.token_manager.get_balance_monitoring()
+    }
+
+    /// 设置余额监控开关
+    pub fn set_balance_monitoring(&self, enabled: bool) -> Result<(), AdminServiceError> {
+        self.token_manager.set_balance_monitoring(enabled);
+        Ok(())
+    }
+
     /// 获取池状态（Idle Pool / Busy Pool）
     pub fn get_pool_status(&self) -> crate::kiro::token_manager::PoolStatusSnapshot {
         self.token_manager.pool_status()

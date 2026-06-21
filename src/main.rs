@@ -188,6 +188,10 @@ async fn main() {
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
                     loop {
                         interval.tick().await;
+                        // 余额监控关闭时跳过轮询，不访问上游、不写余额历史文件
+                        if !service.get_balance_monitoring() {
+                            continue;
+                        }
                         service.poll_all_balances().await;
                     }
                 });

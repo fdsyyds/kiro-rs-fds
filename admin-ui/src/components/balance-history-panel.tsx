@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { RefreshCw, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
+import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { useBalanceHistory, useCredentials } from '@/hooks/use-credentials'
+import { Switch } from '@/components/ui/switch'
+import { useBalanceHistory, useCredentials, useBalanceMonitoring, useSetBalanceMonitoring } from '@/hooks/use-credentials'
 import { useQueryClient } from '@tanstack/react-query'
+import { extractErrorMessage } from '@/lib/utils'
 import type { BalanceHistoryEntry } from '@/types/api'
 
 // 格式化时间戳为可读时间
@@ -23,7 +26,10 @@ function formatNumber(n: number): string {
 }
 
 export function BalanceHistoryPanel() {
-  const { data: historyMap, isLoading, error } = useBalanceHistory()
+  const { data: monitoringData } = useBalanceMonitoring()
+  const monitoringEnabled = monitoringData?.enabled ?? false
+  const { mutate: setMonitoring, isPending: isSettingMonitoring } = useSetBalanceMonitoring()
+  const { data: historyMap, isLoading, error } = useBalanceHistory(monitoringEnabled)
   const { data: credentialsData } = useCredentials()
   const queryClient = useQueryClient()
   // 记录每个凭据的展开状态，默认全部折叠
@@ -32,6 +38,25 @@ export function BalanceHistoryPanel() {
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ['balanceHistory'] })
   }
+
+  const handleToggleMonitoring = (enabled: boolean) => {
+    setMonitoring(enabled, {
+      onSuccess: () => toast.success(enabled ? '已开启用量监控' : '已关闭用量监控'),
+      onError: (err) => toast.error(extractErrorMessage(err)),
+    })
+  }
+
+  // 顶部开关栏（各分支共用）
+  const monitoringToggle = (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-muted-foreground">用量监控</span>
+      <Switch
+        checked={monitoringEnabled}
+        onCheckedChange={handleToggleMonitoring}
+        disabled={isSettingMonitoring}
+      />
+    </div>
+  )
 
   const toggleExpand = (id: string) => {
     setExpandedIds(prev => {
@@ -55,18 +80,46 @@ export function BalanceHistoryPanel() {
     setExpandedIds(new Set())
   }
 
+  // 监控关闭时：不展示数据，仅显示提示与开关（后台轮询也已停止）
+  if (!monitoringEnabled) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">用量监控</h2>
+          {monitoringToggle}
+        </div>
+        <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground gap-1">
+          <span>用量监控已关闭</span>
+          <span className="text-xs">开启后后台每分钟自动轮询凭据余额并记录历史</span>
+        </div>
+      </div>
+    )
+  }
+
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-12 text-muted-foreground">
-        加载中...
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">用量监控</h2>
+          {monitoringToggle}
+        </div>
+        <div className="flex items-center justify-center py-12 text-muted-foreground">
+          加载中...
+        </div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center py-12 text-destructive">
-        加载失败: {(error as Error).message}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">用量监控</h2>
+          {monitoringToggle}
+        </div>
+        <div className="flex items-center justify-center py-12 text-destructive">
+          加载失败: {(error as Error).message}
+        </div>
       </div>
     )
   }
@@ -76,10 +129,13 @@ export function BalanceHistoryPanel() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold">用量监控</h2>
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            <RefreshCw className="h-3 w-3 mr-1" />
-            刷新
-          </Button>
+          <div className="flex items-center gap-2">
+            {monitoringToggle}
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
+              <RefreshCw className="h-3 w-3 mr-1" />
+              刷新
+            </Button>
+          </div>
         </div>
         <div className="flex items-center justify-center py-12 text-muted-foreground">
           暂无余额历史数据，服务启动后每分钟自动记录
@@ -98,6 +154,7 @@ export function BalanceHistoryPanel() {
           <Badge variant="secondary">{entries.length} 个凭据</Badge>
         </div>
         <div className="flex items-center gap-2">
+          {monitoringToggle}
           <Button variant="outline" size="sm" onClick={allExpanded ? collapseAll : expandAll}>
             {allExpanded ? (
               <><ChevronsDownUp className="h-3 w-3 mr-1" />全部折叠</>

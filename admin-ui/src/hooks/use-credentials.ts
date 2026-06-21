@@ -22,6 +22,8 @@ import {
   getBalanceHistory,
   getMultipliers,
   setMultipliers,
+  getBalanceMonitoring,
+  setBalanceMonitoring,
 } from '@/api/credentials'
 import type { AddCredentialRequest, UpdateCredentialRequest, CreateApiKeyRequest, UpdateApiKeyRequest } from '@/types/api'
 
@@ -235,12 +237,12 @@ export function useRpm() {
 
 // ============ 余额历史 Hooks ============
 
-// 查询所有凭据余额历史（每 60 秒刷新）
-export function useBalanceHistory() {
+// 查询所有凭据余额历史（每 60 秒刷新；监控关闭时停止轮询）
+export function useBalanceHistory(pollingEnabled: boolean = true) {
   return useQuery({
     queryKey: ['balanceHistory'],
     queryFn: getBalanceHistory,
-    refetchInterval: 60000,
+    refetchInterval: pollingEnabled ? 60000 : false,
   })
 }
 
@@ -261,6 +263,27 @@ export function useSetMultipliers() {
     mutationFn: ({ inputMultiplier, outputMultiplier }: { inputMultiplier: number; outputMultiplier: number }) => setMultipliers(inputMultiplier, outputMultiplier),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['multipliers'] })
+    },
+  })
+}
+
+// ============ 余额监控开关 Hooks ============
+
+// 获取余额监控开关状态
+export function useBalanceMonitoring() {
+  return useQuery({
+    queryKey: ['balanceMonitoring'],
+    queryFn: getBalanceMonitoring,
+  })
+}
+
+// 设置余额监控开关
+export function useSetBalanceMonitoring() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) => setBalanceMonitoring(enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['balanceMonitoring'] })
     },
   })
 }

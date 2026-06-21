@@ -244,3 +244,15 @@ export async function setCooldown(cooldownSeconds: number): Promise<SuccessRespo
   const { data } = await api.put<SuccessResponse>('/config/cooldown', { cooldownSeconds })
   return data
 }
+
+// 获取余额监控开关状态
+export async function getBalanceMonitoring(): Promise<{ enabled: boolean }> {
+  const { data } = await api.get<{ enabled: boolean }>('/config/balance-monitoring')
+  return data
+}
+
+// 设置余额监控开关
+export async function setBalanceMonitoring(enabled: boolean): Promise<SuccessResponse> {
+  const { data } = await api.put<SuccessResponse>('/config/balance-monitoring', { enabled })
+  return data
+}

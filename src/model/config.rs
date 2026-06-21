@@ -99,6 +99,11 @@ pub struct Config {
     #[serde(default = "default_output_multiplier")]
     pub output_multiplier: f64,
 
+    /// 是否启用余额监控（后台定时轮询凭据余额并记录历史）
+    /// 默认关闭，关闭时后台轮询不再访问上游、不再写余额历史文件
+    #[serde(default)]
+    pub balance_monitoring_enabled: bool,
+
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
     config_path: Option<PathBuf>,
@@ -173,6 +178,7 @@ impl Default for Config {
             load_balancing_mode: default_load_balancing_mode(),
             input_multiplier: default_input_multiplier(),
             output_multiplier: default_output_multiplier(),
+            balance_monitoring_enabled: false,
             config_path: None,
         }
     }
@@ -288,6 +294,11 @@ impl Config {
             if let Ok(m) = v.parse::<f64>() {
                 self.output_multiplier = m;
             }
+        }
+        if let Ok(v) = env::var("BALANCE_MONITORING") {
+            // 支持 "1"/"true"/"on" 视为开启，其余视为关闭
+            let v = v.trim().to_ascii_lowercase();
+            self.balance_monitoring_enabled = matches!(v.as_str(), "1" | "true" | "on" | "yes");
         }
     }
 }

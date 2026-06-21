@@ -222,6 +222,28 @@ pub async fn set_cooldown(
     }
 }
 
+/// GET /api/admin/config/balance-monitoring
+/// 获取余额监控开关状态
+pub async fn get_balance_monitoring(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "enabled": state.service.get_balance_monitoring() }))
+}
+
+/// PUT /api/admin/config/balance-monitoring
+/// 设置余额监控开关
+pub async fn set_balance_monitoring(
+    State(state): State<AdminState>,
+    Json(payload): Json<super::types::SetBalanceMonitoringRequest>,
+) -> impl IntoResponse {
+    match state.service.set_balance_monitoring(payload.enabled) {
+        Ok(_) => Json(SuccessResponse::new(format!(
+            "余额监控已{}",
+            if payload.enabled { "开启" } else { "关闭" }
+        )))
+        .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
 /// GET /api/admin/pool-status
 /// 获取池状态（Idle Pool / Busy Pool）
 pub async fn get_pool_status(State(state): State<AdminState>) -> impl IntoResponse {

@@ -695,7 +695,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.5.2</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.5.3</span>
             <Button
               variant="outline"
               size="sm"

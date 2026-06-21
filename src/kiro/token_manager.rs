@@ -588,6 +588,8 @@ pub struct MultiTokenManager {
     rr_counter: AtomicU64,
     /// 429 冷却时长（秒），前端可配置
     cooldown_seconds: Mutex<u64>,
+    /// 是否启用余额监控（后台定时轮询余额），前端可配置
+    balance_monitoring_enabled: Mutex<bool>,
 }
 
 /// 每个凭据最大 API 调用失败次数
@@ -690,6 +692,7 @@ impl MultiTokenManager {
         let load_balancing_mode = config.load_balancing_mode.clone();
         let input_multiplier = config.input_multiplier;
         let output_multiplier = config.output_multiplier;
+        let balance_monitoring_enabled = config.balance_monitoring_enabled;
         let manager = Self {
             config,
             proxy,
@@ -705,6 +708,7 @@ impl MultiTokenManager {
             stats_dirty: AtomicBool::new(false),
             rr_counter: AtomicU64::new(0),
             cooldown_seconds: Mutex::new(60),
+            balance_monitoring_enabled: Mutex::new(balance_monitoring_enabled),
         };
 
         // 如果有新分配的 ID 或新生成的 machineId，立即持久化到配置文件
@@ -2180,6 +2184,49 @@ impl MultiTokenManager {
 
         tracing::info!("Token 倍率已设置为: input={}, output={}", input, output);
         Ok(())
+    }
+
+    /// 获取余额监控开关状态（Admin API）
+    pub fn get_balance_monitoring(&self) -> bool {
+        *self.balance_monitoring_enabled.lock()
+    }
+
+    fn persist_balance_monitoring(&self, enabled: bool) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let config_path = match self.config.config_path() {
+            Some(path) => path.to_path_buf(),
+            None => {
+                tracing::warn!("配置文件路径未知，余额监控开关仅在当前进程生效: {}", enabled);
+                return Ok(());
+            }
+        };
+
+        let mut config = Config::load(&config_path)
+            .with_context(|| format!("重新加载配置失败: {}", config_path.display()))?;
+        config.balance_monitoring_enabled = enabled;
+        config
+            .save()
+            .with_context(|| format!("持久化余额监控开关失败: {}", config_path.display()))?;
+
+        Ok(())
+    }
+
+    /// 设置余额监控开关（Admin API），并持久化到配置文件
+    pub fn set_balance_monitoring(&self, enabled: bool) {
+        {
+            let mut guard = self.balance_monitoring_enabled.lock();
+            if *guard == enabled {
+                return;
+            }
+            *guard = enabled;
+        }
+
+        if let Err(err) = self.persist_balance_monitoring(enabled) {
+            tracing::warn!("余额监控开关持久化失败，仅当前进程生效: {}", err);
+        }
+
+        tracing::info!("余额监控已{}", if enabled { "开启" } else { "关闭" });
     }
 }
 

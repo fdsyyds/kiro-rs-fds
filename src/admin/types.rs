@@ -273,6 +273,14 @@ pub struct SetCooldownRequest {
     pub cooldown_seconds: u64,
 }
 
+/// 设置余额监控开关请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetBalanceMonitoringRequest {
+    /// 是否启用余额监控
+    pub enabled: bool,
+}
+
 // ============ 通用响应 ============
 
 /// 操作成功响应

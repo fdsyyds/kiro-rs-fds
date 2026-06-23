@@ -16,18 +16,30 @@ const WINDOW_SECS: u64 = 60;
 struct TimestampQueue {
     /// 请求时间戳（单调递增）
     timestamps: Vec<Instant>,
+    /// 累计 record 次数，用于触发惰性清理
+    record_count: u32,
 }
 
 impl TimestampQueue {
     fn new() -> Self {
         Self {
             timestamps: Vec::new(),
+            record_count: 0,
         }
     }
 
     /// 记录一次请求
     fn record(&mut self, now: Instant) {
         self.timestamps.push(now);
+        self.record_count += 1;
+        // 每 64 次 record 触发一次惰性清理，避免 Vec 无限膨胀
+        if self.record_count % 64 == 0 {
+            let cutoff = now - std::time::Duration::from_secs(WINDOW_SECS);
+            let pos = self.timestamps.partition_point(|t| *t < cutoff);
+            if pos > 0 {
+                self.timestamps.drain(..pos);
+            }
+        }
     }
 
     /// 清理过期条目并返回当前窗口内的请求数

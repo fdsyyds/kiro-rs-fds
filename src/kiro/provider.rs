@@ -27,6 +27,9 @@ const MAX_RETRIES_PER_CREDENTIAL: usize = 3;
 /// 总重试次数硬上限
 const MAX_TOTAL_RETRIES: usize = 9;
 
+/// 信号量排队超时（秒）：超过此时间仍未获取到 permit 则返回 503
+const SEMAPHORE_TIMEOUT_SECS: u64 = 30;
+
 /// 最大并发请求数（同时发往上游的请求上限）
 /// 流式请求可能持续 30-60 秒，RPM 100 时同时活跃请求可达 100-200
 const MAX_CONCURRENT_REQUESTS: usize = 200;
@@ -349,7 +352,13 @@ impl KiroProvider {
 
     /// 内部方法：带重试逻辑的 MCP API 调用
     async fn call_mcp_with_retry(&self, request_body: &str) -> anyhow::Result<reqwest::Response> {
-        let _permit = self.concurrency_limit.acquire().await?;
+        let _permit = tokio::time::timeout(
+            Duration::from_secs(SEMAPHORE_TIMEOUT_SECS),
+            self.concurrency_limit.acquire(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("MCP 请求排队超时（{}秒），服务过载", SEMAPHORE_TIMEOUT_SECS))?
+        .map_err(|e| anyhow::anyhow!("信号量已关闭: {}", e))?;
         let total_credentials = self.token_manager.total_count();
         let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
         let max_rate_limit_retries = total_credentials;
@@ -519,7 +528,19 @@ impl KiroProvider {
         let provider_start = std::time::Instant::now();
         let api_type = if is_stream { "流式" } else { "非流式" };
         let t_sem_start = std::time::Instant::now();
-        let _permit = self.concurrency_limit.acquire().await?;
+        let _permit = tokio::time::timeout(
+            Duration::from_secs(SEMAPHORE_TIMEOUT_SECS),
+            self.concurrency_limit.acquire(),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "{} API 请求排队超时（{}秒），服务过载，请稍后重试",
+                api_type,
+                SEMAPHORE_TIMEOUT_SECS
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("信号量已关闭: {}", e))?;
         let sem_wait_ms = t_sem_start.elapsed().as_millis();
         tracing::info!(
             request_id = request_id.unwrap_or(""),

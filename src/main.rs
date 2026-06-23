@@ -12,12 +12,14 @@ mod user_ui;
 use std::sync::Arc;
 
 use clap::Parser;
+use tower::limit::ConcurrencyLimitLayer;
 use kiro::model::credentials::{CredentialsConfig, KiroCredentials};
 use kiro::provider::KiroProvider;
 use kiro::token_manager::MultiTokenManager;
 use model::api_key::ApiKeyManager;
 use model::arg::Args;
 use model::config::Config;
+use model::error_log::ErrorLogger;
 use model::usage::UsageTracker;
 
 #[tokio::main]
@@ -140,14 +142,30 @@ async fn main() {
             });
         let tracker = Arc::new(tracker);
 
+        // 启动后台用量落盘任务（每30秒，仅有未落盘更新时才写）
+        {
+            let tracker = tracker.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                loop {
+                    interval.tick().await;
+                    tracker.flush_if_dirty();
+                }
+            });
+        }
+
         tracing::info!("API Key 多用户管理已启用");
         (Some(manager), Some(tracker))
     } else {
         (None, None)
     };
 
+    // 创建错误日志收集器（内存中保留 200 条）
+    let error_logger = Arc::new(ErrorLogger::new(200));
+
     let mut anthropic_app_state = anthropic::middleware::AppState::new(&api_key)
-        .with_rpm_tracker(rpm_tracker.clone());
+        .with_rpm_tracker(rpm_tracker.clone())
+        .with_error_logger(error_logger.clone());
     if let Some(ref manager) = api_key_manager {
         anthropic_app_state = anthropic_app_state.with_api_key_manager(manager.clone());
     }
@@ -170,7 +188,8 @@ async fn main() {
             let admin_service = admin::AdminService::new(token_manager.clone());
             let mut admin_state = admin::AdminState::new(admin_key, admin_service)
                 .with_master_api_key(&api_key)
-                .with_rpm_tracker(rpm_tracker.clone());
+                .with_rpm_tracker(rpm_tracker.clone())
+                .with_error_logger(error_logger.clone());
             if let Some(ref manager) = api_key_manager {
                 admin_state = admin_state.with_api_key_manager(manager.clone());
             }
@@ -249,5 +268,8 @@ async fn main() {
     }
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    // 全局并发限制：最多同时处理 128 个请求，超出返回 503
+    // 防止高 RPM 下请求无限堆积导致 tokio runtime 饥饿
+    let app = app.layer(ConcurrencyLimitLayer::new(128));
     axum::serve(listener, app).await.unwrap();
 }

@@ -256,3 +256,37 @@ export async function setBalanceMonitoring(enabled: boolean): Promise<SuccessRes
   const { data } = await api.put<SuccessResponse>('/config/balance-monitoring', { enabled })
   return data
 }
+
+// ============ 错误日志 ============
+
+export interface ErrorLogEntry {
+  request_id: string
+  timestamp: string
+  endpoint: string
+  model: string | null
+  credential_id: number | null
+  api_key_id: number | null
+  client_ip: string | null
+  error_type: string
+  error_message: string
+  status_code: number
+  upstream_response: string | null
+  request_body: string | null
+}
+
+export interface ErrorLogsResponse {
+  total: number
+  logs: ErrorLogEntry[]
+}
+
+// 获取错误日志
+export async function getErrorLogs(): Promise<ErrorLogsResponse> {
+  const { data } = await api.get<ErrorLogsResponse>('/error-logs')
+  return data
+}
+
+// 清空错误日志
+export async function clearErrorLogs(): Promise<SuccessResponse> {
+  const { data } = await api.delete<SuccessResponse>('/error-logs')
+  return data
+}

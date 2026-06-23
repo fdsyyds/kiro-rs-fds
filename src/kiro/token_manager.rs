@@ -842,18 +842,26 @@ impl MultiTokenManager {
                 anyhow::bail!("所有凭据均无法获取有效 Token");
             }
 
+            // 在锁外预先获取所有凭据的 RPM 快照，避免持有 entries 锁时再抢 RpmTracker 锁
+            let rpm_snapshot: Option<HashMap<u64, u64>> = rpm_tracker.map(|t| {
+                let snap = t.snapshot();
+                snap.by_credential
+            });
+
             let (id, credentials) = {
+                // 在获取 entries 锁之前先读取轻量配置，减少锁持有时间
+                let is_balanced = self.load_balancing_mode.lock().as_str() == "balanced";
+                let current_id_val = *self.current_id.lock();
+
                 // 单次锁操作完成所有凭据选择逻辑
                 let mut entries = self.entries.lock();
-                let mode = self.load_balancing_mode.lock().clone();
-                let is_balanced = mode.as_str() == "balanced";
 
                 // priority 模式：优先使用 current_id 指向的凭据
                 let now = Utc::now();
                 let current_hit = if is_balanced {
                     None
                 } else {
-                    let current_id = *self.current_id.lock();
+                    let current_id = current_id_val;
                     entries
                         .iter()
                         .find(|e| {
@@ -866,8 +874,9 @@ impl MultiTokenManager {
                                     return false;
                                 }
                             }
-                            if let (Some(limit), Some(tracker)) = (e.credentials.rpm_limit, rpm_tracker) {
-                                if tracker.get_credential_rpm(e.id) >= limit as u64 {
+                            // 使用预先获取的 RPM 快照进行限流检查（无锁）
+                            if let (Some(limit), Some(snap)) = (e.credentials.rpm_limit, &rpm_snapshot) {
+                                if snap.get(&e.id).copied().unwrap_or(0) >= limit as u64 {
                                     return false;
                                 }
                             }
@@ -899,8 +908,9 @@ impl MultiTokenManager {
                             if is_opus && !e.credentials.supports_opus() {
                                 return false;
                             }
-                            if let (Some(limit), Some(tracker)) = (e.credentials.rpm_limit, rpm_tracker) {
-                                if tracker.get_credential_rpm(e.id) >= limit as u64 {
+                            // 使用预先获取的 RPM 快照进行限流检查（无锁）
+                            if let (Some(limit), Some(snap)) = (e.credentials.rpm_limit, &rpm_snapshot) {
+                                if snap.get(&e.id).copied().unwrap_or(0) >= limit as u64 {
                                     return false;
                                 }
                             }

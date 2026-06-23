@@ -3,7 +3,7 @@
 use axum::{
     Json,
     extract::{Path, State},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 
 use super::{
@@ -248,4 +248,33 @@ pub async fn set_balance_monitoring(
 /// 获取池状态（Idle Pool / Busy Pool）
 pub async fn get_pool_status(State(state): State<AdminState>) -> impl IntoResponse {
     Json(state.service.get_pool_status())
+}
+
+/// GET /api/admin/error-logs
+/// 获取最近的错误日志
+pub async fn get_error_logs(State(state): State<AdminState>) -> Response {
+    match &state.error_logger {
+        Some(logger) => {
+            let logs = logger.get_recent(200);
+            Json(serde_json::json!({
+                "total": logger.len(),
+                "logs": logs,
+            }))
+            .into_response()
+        }
+        None => Json(serde_json::json!({
+            "total": 0,
+            "logs": [],
+        }))
+        .into_response(),
+    }
+}
+
+/// DELETE /api/admin/error-logs
+/// 清空错误日志
+pub async fn clear_error_logs(State(state): State<AdminState>) -> impl IntoResponse {
+    if let Some(logger) = &state.error_logger {
+        logger.clear();
+    }
+    Json(SuccessResponse::new("错误日志已清空".to_string()))
 }

@@ -1106,19 +1106,15 @@ impl StreamContext {
             self.cache_read_tokens
         };
 
-        // 记录用量
+        // 记录用量（纯内存聚合，由后台任务定时落盘，不阻塞当前线程）
         if let (Some(tracker), Some(key_id)) = (self.usage_tracker.clone(), self.api_key_id) {
-            let model = self.model.clone();
-            let output_tokens = self.output_tokens;
-            tokio::task::spawn_blocking(move || {
-                tracker.record(
-                    key_id,
-                    model,
-                    final_input_tokens,
-                    output_tokens,
-                    final_cache_read,
-                );
-            });
+            tracker.record(
+                key_id,
+                self.model.clone(),
+                final_input_tokens,
+                self.output_tokens,
+                final_cache_read,
+            );
         }
 
         // 生成最终事件（应用 Token 倍率）

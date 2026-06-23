@@ -1,10 +1,12 @@
 //! Anthropic API Handler 函数
 
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
+use crate::model::error_log::{ErrorLogEntry, ErrorLogger};
 use crate::token;
 use anyhow::Error;
 use axum::{
@@ -15,6 +17,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use bytes::Bytes;
+use chrono::Utc;
 use futures::{Stream, StreamExt, stream};
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -136,13 +139,67 @@ pub async fn ping(request: axum::http::Request<Body>) -> impl IntoResponse {
     }))
 }
 
-/// 将 KiroProvider 错误映射为 HTTP 响应
-fn map_provider_error(err: Error) -> Response {
+/// 记录错误到 ErrorLogger
+fn record_error(
+    logger: &Option<Arc<ErrorLogger>>,
+    request_id: &str,
+    endpoint: &str,
+    model: Option<&str>,
+    api_key_id: Option<u32>,
+    error_type: &str,
+    error_message: &str,
+    status_code: u16,
+    upstream_response: Option<String>,
+    request_body: Option<String>,
+) {
+    if let Some(logger) = logger {
+        // 请求体截断到 4KB 避免内存占用过大
+        let truncated_body = request_body.map(|body| {
+            if body.len() > 4096 {
+                format!("{}...(truncated, total {} bytes)", &body[..4096], body.len())
+            } else {
+                body
+            }
+        });
+
+        logger.log(ErrorLogEntry {
+            request_id: request_id.to_string(),
+            timestamp: Utc::now(),
+            endpoint: endpoint.to_string(),
+            model: model.map(|s| s.to_string()),
+            credential_id: None, // 凭据 ID 在 provider 层面，暂时无法获取
+            api_key_id,
+            client_ip: None, // 后续可扩展
+            error_type: error_type.to_string(),
+            error_message: error_message.to_string(),
+            status_code,
+            upstream_response,
+            request_body: truncated_body,
+        });
+    }
+}
+
+/// 将 KiroProvider 错误映射为 HTTP 响应（带错误日志记录）
+fn map_provider_error_with_log(
+    err: Error,
+    logger: &Option<Arc<ErrorLogger>>,
+    request_id: &str,
+    endpoint: &str,
+    model: Option<&str>,
+    api_key_id: Option<u32>,
+    request_body: Option<String>,
+) -> Response {
     let err_str = err.to_string();
 
     // 上下文窗口满了（对话历史累积超出模型上下文窗口限制）
     if err_str.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") {
         tracing::warn!(error = %err, "上游拒绝请求：上下文窗口已满（不应重试）");
+        record_error(
+            logger, request_id, endpoint, model, api_key_id,
+            "invalid_request_error",
+            "Context window is full. Reduce conversation history, system prompt, or tools.",
+            400, Some(err_str), request_body,
+        );
         return (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse::new(
@@ -156,6 +213,12 @@ fn map_provider_error(err: Error) -> Response {
     // 单次输入太长（请求体本身超出上游限制）
     if err_str.contains("Input is too long") {
         tracing::warn!(error = %err, "上游拒绝请求：输入过长（不应重试）");
+        record_error(
+            logger, request_id, endpoint, model, api_key_id,
+            "invalid_request_error",
+            "Input is too long. Reduce the size of your messages.",
+            400, Some(err_str), request_body,
+        );
         return (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse::new(
@@ -166,11 +229,16 @@ fn map_provider_error(err: Error) -> Response {
             .into_response();
     }
     tracing::error!("Kiro API 调用失败: {}", err);
+    let error_msg = format!("上游 API 调用失败: {}", err);
+    record_error(
+        logger, request_id, endpoint, model, api_key_id,
+        "api_error", &error_msg, 502, Some(err_str), request_body,
+    );
     (
         StatusCode::BAD_GATEWAY,
         Json(ErrorResponse::new(
             "api_error",
-            format!("上游 API 调用失败: {}", err),
+            error_msg,
         )),
     )
         .into_response()
@@ -449,6 +517,11 @@ pub async fn post_messages(
         Some(p) => p.clone(),
         None => {
             tracing::error!("KiroProvider 未配置");
+            record_error(
+                &state.error_logger, &request_id, endpoint, Some(&payload.model), None,
+                "service_unavailable", "Kiro API provider not configured",
+                503, None, None,
+            );
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse::new(
@@ -525,6 +598,10 @@ pub async fn post_messages(
                 }
             };
             tracing::warn!("请求转换失败: {}", e);
+            record_error(
+                &state.error_logger, &request_id, endpoint, Some(&payload.model), None,
+                error_type, &message, 400, None, None,
+            );
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse::new(error_type, message)),
@@ -559,11 +636,16 @@ pub async fn post_messages(
         Ok(body) => body,
         Err(e) => {
             tracing::error!("序列化请求失败: {}", e);
+            let error_msg = format!("序列化请求失败: {}", e);
+            record_error(
+                &state.error_logger, &request_id, endpoint, Some(&payload.model), None,
+                "internal_error", &error_msg, 500, None, None,
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse::new(
                     "internal_error",
-                    format!("序列化请求失败: {}", e),
+                    error_msg,
                 )),
             )
                 .into_response();
@@ -682,6 +764,7 @@ pub async fn post_messages(
             request_id,
             endpoint,
             request_start,
+            state.error_logger.clone(),
         )
         .await
     } else {
@@ -699,6 +782,7 @@ pub async fn post_messages(
             request_id,
             endpoint,
             request_start,
+            state.error_logger.clone(),
         )
         .await
     }
@@ -719,6 +803,7 @@ async fn handle_stream_request(
     request_id: String,
     endpoint: &'static str,
     request_start: Instant,
+    error_logger: Option<Arc<ErrorLogger>>,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let stage_start = Instant::now();
@@ -727,7 +812,10 @@ async fn handle_stream_request(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => return map_provider_error(e),
+        Err(e) => return map_provider_error_with_log(
+            e, &error_logger, &request_id, endpoint,
+            Some(model), api_key_id, Some(request_body.to_string()),
+        ),
     };
     log_request_stage(
         &request_id,
@@ -1058,12 +1146,16 @@ async fn handle_non_stream_request(
     request_id: String,
     endpoint: &'static str,
     request_start: Instant,
+    error_logger: Option<Arc<ErrorLogger>>,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let stage_start = Instant::now();
     let response = match provider.call_api(request_body).await {
         Ok(resp) => resp,
-        Err(e) => return map_provider_error(e),
+        Err(e) => return map_provider_error_with_log(
+            e, &error_logger, &request_id, endpoint,
+            Some(model), api_key_id, Some(request_body.to_string()),
+        ),
     };
     log_request_stage(
         &request_id,
@@ -1079,11 +1171,16 @@ async fn handle_non_stream_request(
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::error!("读取响应体失败: {}", e);
+            let error_msg = format!("读取响应失败: {}", e);
+            record_error(
+                &error_logger, &request_id, endpoint, Some(model), api_key_id,
+                "api_error", &error_msg, 502, None, Some(request_body.to_string()),
+            );
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse::new(
                     "api_error",
-                    format!("读取响应失败: {}", e),
+                    error_msg,
                 )),
             )
                 .into_response();
@@ -1235,19 +1332,16 @@ async fn handle_non_stream_request(
         request_start,
     );
 
-    // 记录用量
+    // 记录用量（纯内存聚合，由后台任务定时落盘，不阻塞当前线程）
     let stage_start = Instant::now();
     if let (Some(tracker), Some(key_id)) = (usage_tracker, api_key_id) {
-        let model = model.to_string();
-        tokio::task::spawn_blocking(move || {
-            tracker.record(
-                key_id,
-                model,
-                final_input_tokens,
-                output_tokens,
-                final_cache_read,
-            );
-        });
+        tracker.record(
+            key_id,
+            model.to_string(),
+            final_input_tokens,
+            output_tokens,
+            final_cache_read,
+        );
     }
     log_request_stage(
         &request_id,
@@ -1379,6 +1473,11 @@ pub async fn post_messages_cc(
         Some(p) => p.clone(),
         None => {
             tracing::error!("KiroProvider 未配置");
+            record_error(
+                &state.error_logger, &request_id, endpoint, Some(&payload.model), None,
+                "service_unavailable", "Kiro API provider not configured",
+                503, None, None,
+            );
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse::new(
@@ -1455,6 +1554,10 @@ pub async fn post_messages_cc(
                 }
             };
             tracing::warn!("请求转换失败: {}", e);
+            record_error(
+                &state.error_logger, &request_id, endpoint, Some(&payload.model), None,
+                error_type, &message, 400, None, None,
+            );
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse::new(error_type, message)),
@@ -1489,11 +1592,16 @@ pub async fn post_messages_cc(
         Ok(body) => body,
         Err(e) => {
             tracing::error!("序列化请求失败: {}", e);
+            let error_msg = format!("序列化请求失败: {}", e);
+            record_error(
+                &state.error_logger, &request_id, endpoint, Some(&payload.model), None,
+                "internal_error", &error_msg, 500, None, None,
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse::new(
                     "internal_error",
-                    format!("序列化请求失败: {}", e),
+                    error_msg,
                 )),
             )
                 .into_response();
@@ -1611,6 +1719,7 @@ pub async fn post_messages_cc(
             request_id,
             endpoint,
             request_start,
+            state.error_logger.clone(),
         )
         .await
     } else {
@@ -1628,6 +1737,7 @@ pub async fn post_messages_cc(
             request_id,
             endpoint,
             request_start,
+            state.error_logger.clone(),
         )
         .await
     }
@@ -1652,6 +1762,7 @@ async fn handle_stream_request_buffered(
     request_id: String,
     endpoint: &'static str,
     request_start: Instant,
+    error_logger: Option<Arc<ErrorLogger>>,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let stage_start = Instant::now();
@@ -1660,7 +1771,10 @@ async fn handle_stream_request_buffered(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => return map_provider_error(e),
+        Err(e) => return map_provider_error_with_log(
+            e, &error_logger, &request_id, endpoint,
+            Some(model), api_key_id, Some(request_body.to_string()),
+        ),
     };
     log_request_stage(
         &request_id,

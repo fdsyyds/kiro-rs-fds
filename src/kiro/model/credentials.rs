@@ -343,6 +343,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            rpm_limit: None,
             disabled: false,
         };
 
@@ -461,6 +462,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            rpm_limit: None,
             disabled: false,
         };
 
@@ -491,6 +493,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            rpm_limit: None,
             disabled: false,
         };
 
@@ -603,6 +606,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            rpm_limit: None,
             disabled: false,
         };
 

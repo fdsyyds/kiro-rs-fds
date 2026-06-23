@@ -14,6 +14,7 @@ use super::service::AdminService;
 use super::types::AdminErrorResponse;
 use crate::common::auth;
 use crate::model::api_key::ApiKeyManager;
+use crate::model::error_log::ErrorLogger;
 use crate::model::rpm::RpmTracker;
 use crate::model::usage::UsageTracker;
 
@@ -32,6 +33,8 @@ pub struct AdminState {
     pub usage_tracker: Option<Arc<UsageTracker>>,
     /// RPM 追踪器（可选）
     pub rpm_tracker: Option<Arc<RpmTracker>>,
+    /// 错误日志收集器（可选）
+    pub error_logger: Option<Arc<ErrorLogger>>,
 }
 
 impl AdminState {
@@ -43,6 +46,7 @@ impl AdminState {
             api_key_manager: None,
             usage_tracker: None,
             rpm_tracker: None,
+            error_logger: None,
         }
     }
 
@@ -63,6 +67,11 @@ impl AdminState {
 
     pub fn with_rpm_tracker(mut self, tracker: Arc<RpmTracker>) -> Self {
         self.rpm_tracker = Some(tracker);
+        self
+    }
+
+    pub fn with_error_logger(mut self, logger: Arc<ErrorLogger>) -> Self {
+        self.error_logger = Some(logger);
         self
     }
 }

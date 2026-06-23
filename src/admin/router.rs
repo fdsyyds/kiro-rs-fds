@@ -11,12 +11,12 @@ use super::{
         list_api_keys, reset_key_usage, update_api_key,
     },
     handlers::{
-        add_credential, delete_all_credentials, delete_credential, export_credentials,
-        get_all_balance_history, get_all_credentials, get_balance_monitoring, get_cooldown,
-        get_credential_balance, get_credential_balance_history, get_load_balancing_mode,
-        get_multipliers, get_pool_status, reset_failure_count, set_balance_monitoring,
-        set_cooldown, set_credential_disabled, set_credential_priority, set_load_balancing_mode,
-        set_multipliers, update_credential,
+        add_credential, clear_error_logs, delete_all_credentials, delete_credential,
+        export_credentials, get_all_balance_history, get_all_credentials, get_balance_monitoring,
+        get_cooldown, get_credential_balance, get_credential_balance_history, get_error_logs,
+        get_load_balancing_mode, get_multipliers, get_pool_status, reset_failure_count,
+        set_balance_monitoring, set_cooldown, set_credential_disabled, set_credential_priority,
+        set_load_balancing_mode, set_multipliers, update_credential,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -60,6 +60,8 @@ pub fn create_admin_router(state: AdminState) -> Router {
         )
         // 池状态
         .route("/pool-status", get(get_pool_status))
+        // 错误日志
+        .route("/error-logs", get(get_error_logs).delete(clear_error_logs))
         // API Key 管理
         .route("/server-info", get(get_server_info))
         .route("/api-keys", get(list_api_keys).post(create_api_key))

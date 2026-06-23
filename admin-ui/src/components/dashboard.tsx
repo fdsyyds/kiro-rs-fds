@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Download, Trash2, RotateCcw, CheckCircle2, Key, BarChart3, Zap, Search, X } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Download, Trash2, RotateCcw, CheckCircle2, Key, BarChart3, Zap, Search, X, AlertTriangle } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
@@ -16,6 +16,7 @@ import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-
 import { ApiKeysPanel } from '@/components/api-keys-panel'
 import { BalanceHistoryPanel } from '@/components/balance-history-panel'
 import { PoolStatusPanel } from '@/components/pool-status-panel'
+import { ErrorLogsPanel } from '@/components/error-logs-panel'
 import { useCredentials, useDeleteCredential, useDeleteAllCredentials, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode, useRpm, useMultipliers, useSetMultipliers } from '@/hooks/use-credentials'
 import { getCredentialBalance, exportCredentials } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
@@ -26,7 +27,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onLogout }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState<'credentials' | 'apikeys' | 'balance-history' | 'pool-status'>('credentials')
+  const [activeTab, setActiveTab] = useState<'credentials' | 'apikeys' | 'balance-history' | 'pool-status' | 'error-logs'>('credentials')
   const [selectedCredentialId, setSelectedCredentialId] = useState<number | null>(null)
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
@@ -625,6 +626,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 <Zap className="h-3 w-3 sm:mr-1" />
                 <span className="hidden sm:inline">池状态</span>
               </Button>
+              <Button
+                variant={activeTab === 'error-logs' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setActiveTab('error-logs')}
+                className="h-7 px-2 sm:px-3 text-xs"
+              >
+                <AlertTriangle className="h-3 w-3 sm:mr-1" />
+                <span className="hidden sm:inline">错误日志</span>
+              </Button>
             </div>
           </div>
           <div className="flex items-center gap-1 sm:gap-2">
@@ -695,7 +705,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
             </div>
-            <span className="text-xs text-muted-foreground hidden sm:inline">v1.5.3</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">v1.5.4</span>
             <Button
               variant="outline"
               size="sm"
@@ -727,6 +737,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
           <BalanceHistoryPanel />
         ) : activeTab === 'pool-status' ? (
           <PoolStatusPanel />
+        ) : activeTab === 'error-logs' ? (
+          <ErrorLogsPanel />
         ) : (
         <>
         {/* 统计卡片 */}

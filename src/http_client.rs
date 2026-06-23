@@ -51,9 +51,11 @@ pub fn build_client(
 ) -> anyhow::Result<Client> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
-        .pool_max_idle_per_host(20)
+        .pool_max_idle_per_host(100) // 提高空闲连接池以匹配并发上限，减少重建连接开销
         .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(30));
+        .tcp_keepalive(Duration::from_secs(30))
+        .http2_keep_alive_interval(Duration::from_secs(15)) // HTTP/2 连接保活
+        .http2_keep_alive_timeout(Duration::from_secs(10));
 
     if tls_backend == TlsBackend::Rustls {
         builder = builder.use_rustls_tls();
